@@ -3,9 +3,14 @@ import { Server as SocketServer, Socket } from "socket.io";
 import { Server as HttpServer } from "http";
 import { DockerManager } from "../Docker/DockerManager";
 import { createPtyProcess } from "../terminal/pty";
+import path from "path";
+import { exec } from "child_process";
+import { promisify } from "util";
+
+const execPromise = promisify(exec);
 
 export class WebSocketService {
-  private io: SocketServer;
+  public io: SocketServer;
   private dockerManager: DockerManager;
   private activeTerminals: Map<string, any>; // Map roomId -> PTY process
   private roomUsers: Map<string, Set<string>>; // Map roomId -> Set of connected user IDs
@@ -54,11 +59,16 @@ export class WebSocketService {
 
             const ptyProcess = await createPtyProcess(container.id);
             this.activeTerminals.set(roomId, ptyProcess);
-            console.log("🅿️pty process",ptyProcess)
             ptyProcess.onData((data) => {
-              console.log("pty output",data)
+              // console.log("pty output",data)
               this.io.to(roomId).emit("terminal:output", data.toString());
             });
+            const containerId = container?.id
+            // const containerId = this.dockerManager.activeContainers[roomId];
+            if (containerId) {
+              this.dockerManager.monitorPorts(roomId, containerId); // Start monitoring this container
+            }
+            
           } catch (error) {
             console.error("❌ Error setting up PTY:", error);
             socket.emit("error", "Failed to create terminal session");
@@ -72,7 +82,7 @@ export class WebSocketService {
 
         socket.on("terminal:write", (data) => {
           if (this.activeTerminals.has(roomId)) {
-            console.log(`📥 Received from frontend:`, JSON.stringify(data));
+            // console.log(`📥 Received from frontend:`, JSON.stringify(data));
         
             // Ensure proper newline handling
             if (data === "\r") {
@@ -107,6 +117,20 @@ export class WebSocketService {
           // }
         });
       });
+
     });
   }
+
+  public async emitToRoom(roomId: string, event: string, tree: any) {
+    const sanitizedRoomId = path.basename(roomId); // Ensure clean room ID
+    console.log("Emitting directory update:", sanitizedRoomId, tree);
+    
+    if (!tree) {
+        console.warn("Warning: Empty file tree");
+        return;
+    }
+
+    this.io.to(sanitizedRoomId).emit("directory:changed", tree);
+}
+
 }

@@ -8,12 +8,19 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.WebSocketService = void 0;
 // WebSocketService.ts
 const socket_io_1 = require("socket.io");
 const DockerManager_1 = require("../Docker/DockerManager");
 const pty_1 = require("../terminal/pty");
+const path_1 = __importDefault(require("path"));
+const child_process_1 = require("child_process");
+const util_1 = require("util");
+const execPromise = (0, util_1.promisify)(child_process_1.exec);
 class WebSocketService {
     constructor(server) {
         this.io = new socket_io_1.Server(server, { cors: { origin: "*" } });
@@ -53,11 +60,15 @@ class WebSocketService {
                             throw new Error(`🚨 Container not found for roomId: ${roomId}`);
                         const ptyProcess = yield (0, pty_1.createPtyProcess)(container.id);
                         this.activeTerminals.set(roomId, ptyProcess);
-                        console.log("🅿️pty process", ptyProcess);
                         ptyProcess.onData((data) => {
-                            console.log("pty output", data);
+                            // console.log("pty output",data)
                             this.io.to(roomId).emit("terminal:output", data.toString());
                         });
+                        const containerId = container === null || container === void 0 ? void 0 : container.id;
+                        // const containerId = this.dockerManager.activeContainers[roomId];
+                        if (containerId) {
+                            this.dockerManager.monitorPorts(roomId, containerId); // Start monitoring this container
+                        }
                     }
                     catch (error) {
                         console.error("❌ Error setting up PTY:", error);
@@ -71,7 +82,7 @@ class WebSocketService {
                 socket.join(roomId);
                 socket.on("terminal:write", (data) => {
                     if (this.activeTerminals.has(roomId)) {
-                        console.log(`📥 Received from frontend:`, JSON.stringify(data));
+                        // console.log(`📥 Received from frontend:`, JSON.stringify(data));
                         // Ensure proper newline handling
                         if (data === "\r") {
                             data = "\n"; // Convert Carriage Return to Newline
@@ -101,6 +112,17 @@ class WebSocketService {
                     // }
                 }));
             }));
+        });
+    }
+    emitToRoom(roomId, event, tree) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const sanitizedRoomId = path_1.default.basename(roomId); // Ensure clean room ID
+            console.log("Emitting directory update:", sanitizedRoomId, tree);
+            if (!tree) {
+                console.warn("Warning: Empty file tree");
+                return;
+            }
+            this.io.to(sanitizedRoomId).emit("directory:changed", tree);
         });
     }
 }
