@@ -81,23 +81,37 @@ export class WebSocketService {
         socket.join(roomId);
 
         socket.on("terminal:write", (data) => {
-          if (this.activeTerminals.has(roomId)) {
-            // console.log(`📥 Received from frontend:`, JSON.stringify(data));
-        
-            // Ensure proper newline handling
-            if (data === "\r") {
-              data = "\n"; // Convert Carriage Return to Newline
-            }
-        
-            this.activeTerminals.get(roomId).write(data);
+          const pty = this.activeTerminals.get(roomId);
+          if (!pty) {
+            console.warn(`⚠️ No active PTY for room: ${roomId}`);
+            return;
           }
+        
+          pty.write(data); // ✅ Send raw input directly without modifying line endings
         });
+        
         
         socket.on("terminal:resize", ({ cols, rows }) => {
-          if (this.activeTerminals.has(roomId)) {
-            this.activeTerminals.get(roomId).resize(cols, rows);
+          const pty = this.activeTerminals.get(roomId);
+          if (!pty) {
+            console.warn(`⚠️ No active PTY for room: ${roomId}`);
+            return;
+          }
+        
+          // Ensure cols and rows are valid numbers
+          if (!cols || !rows || cols < 10 || rows < 5) {
+            console.warn(`⚠️ Ignoring invalid terminal size: ${cols}x${rows}`);
+            return;
+          }
+        
+          // Resize only if different from current size
+          if (pty._cols !== cols || pty._rows !== rows) {
+            console.log(`📏 Resizing PTY to ${cols}x${rows}`);
+            pty.resize(cols, rows);
           }
         });
+        
+        
 
         // Handle user disconnect
         socket.on("disconnect", async () => {
