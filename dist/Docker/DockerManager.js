@@ -19,8 +19,10 @@ const promises_1 = __importDefault(require("fs/promises"));
 const child_process_1 = require("child_process");
 const util_1 = require("util");
 const fileSystemService_1 = require("./fileSystemService");
+const __1 = require("..");
 const execAsync = (0, util_1.promisify)(child_process_1.exec);
 class DockerManager {
+    // private wsservice:WebSocketService;
     constructor() {
         this.networkName = "cloud_ide_network";
         this.nginxContainer = null;
@@ -29,6 +31,7 @@ class DockerManager {
         this.roomFileTrees = new Map();
         this.fileSystemService = new fileSystemService_1.FileSystemService(this.docker);
         this.initializeNginxProxy().catch((err) => console.error("Nginx init failed:", err));
+        // this.wsService = new WebSocketService(htt);
     }
     initializeNginxProxy() {
         return __awaiter(this, void 0, void 0, function* () {
@@ -190,23 +193,28 @@ ${configParts.map((p) => p.defaultLocation + p.locations).join("\n")}
     }
     monitorPorts(roomId, containerId) {
         return __awaiter(this, void 0, void 0, function* () {
-            let previousPorts = [];
-            setInterval(() => __awaiter(this, void 0, void 0, function* () {
-                const ports = yield this.getActivePorts(containerId);
-                if (ports.length !== previousPorts.length ||
-                    ports.some((p) => !previousPorts.includes(p))) {
-                    for (const oldPort of previousPorts) {
-                        if (!ports.includes(oldPort)) {
-                            yield this.fileSystemService.execInContainer(containerId, `pkill -f "socat.*:${oldPort}"`);
-                        }
+            console.log(`🔍 Starting port monitoring for room: ${roomId}, container: ${containerId}`);
+            const container = yield this.getContainer(roomId);
+            if (!container || !(container === null || container === void 0 ? void 0 : container.id))
+                throw new Error("no container found for monitoring");
+            const monitor = () => __awaiter(this, void 0, void 0, function* () {
+                try {
+                    const activePorts = yield this.getActivePorts(containerId);
+                    if (activePorts.length > 0) {
+                        __1.webSocketServiceInstance.io.to(roomId).emit("active-ports", { containerId, ports: activePorts });
+                        console.log(`📤 Emitted active-ports for ${roomId}:`, activePorts);
                     }
-                    for (const port of ports) {
-                        yield this.fileSystemService.execInContainer(containerId, `socat TCP-LISTEN:${port},fork,reuseaddr TCP:127.0.0.1:${port} &`);
+                    else {
+                        console.log(`ℹ️ No active ports detected for ${roomId}`);
                     }
-                    yield this.updateNginxConfig();
-                    previousPorts = [...ports];
                 }
-            }), 5000);
+                catch (error) {
+                    console.error(`❌ Error monitoring ports for ${roomId}:`, error);
+                }
+            });
+            yield monitor();
+            const interval = setInterval(monitor, 5000);
+            container.wait(() => clearInterval(interval));
         });
     }
     getContainerIP(roomId) {

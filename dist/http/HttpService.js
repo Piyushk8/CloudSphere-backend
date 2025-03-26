@@ -39,6 +39,7 @@ class HttpService {
             res.json({ message: "Hello, Cloud IDE is running!" });
         });
         // Retrieve File Tree
+        //@ts-ignore
         this.app.get("/files/:roomId", (req, res) => __awaiter(this, void 0, void 0, function* () {
             try {
                 const { roomId } = req.params;
@@ -57,6 +58,7 @@ class HttpService {
             }
         }));
         // Create Room
+        //@ts-ignore
         this.app.post("/createRoom", (req, res) => __awaiter(this, void 0, void 0, function* () {
             try {
                 const { language } = req.body;

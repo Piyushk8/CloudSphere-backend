@@ -34,6 +34,7 @@ export class HttpService {
     });
 
     // Retrieve File Tree
+    //@ts-ignore
     this.app.get("/files/:roomId", async (req: Request, res: Response) => {
       try {
         const { roomId } = req.params;
@@ -54,34 +55,35 @@ export class HttpService {
     });
 
     // Create Room
+    //@ts-ignore
     this.app.post("/createRoom", async (req: Request, res: Response) => {
       try {
         const { language } = req.body;
         if (!language) {
           return res.status(400).json({ error: "Language selection is required" });
         }
-
+        
         const languageConfig = getLanguageConfig(language);
         if (!languageConfig) {
           return res.status(400).json({ error: "Unsupported language" });
         }
-
+        
         const roomId = `room-${Date.now()}-${randomUUID()}`;
         const workspacePath = path.resolve("storage", roomId);
         await fs.mkdir(workspacePath, { recursive: true });
-
+        
         const containerOptions: ContainerOptions = {
           image: languageConfig.image,
           roomId,
           exposedPort: languageConfig.port,
           envVars: languageConfig.envVars,
         };
-
+        
         const { containerId, hostPort } = await this.dockerManager.createContainer(containerOptions);
         if (!containerId || !hostPort) {
           return res.status(500).json({ error: "Failed to create container" });
         }
-
+        
         res.json({ message: "Room created successfully", roomId, containerId, hostPort, workspacePath });
       } catch (error) {
         console.error("Error creating room:", error);

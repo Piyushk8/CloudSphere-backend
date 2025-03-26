@@ -1,4 +1,4 @@
-import { spawn, IPty } from "node-pty";
+import { spawn, IPty } from "node-pty"; // Ensure IPty is imported correctly
 
 export async function createPtyProcess(containerId: string): Promise<IPty> {
   return new Promise((resolve, reject) => {
@@ -27,37 +27,28 @@ export async function createPtyProcess(containerId: string): Promise<IPty> {
         }
       );
 
-      // ptyProcess.onData((data) => {
-      //   console.log(`[PTY Docker Output]:`, JSON.stringify(data));
-      // });
-
       ptyProcess.onExit(({ exitCode }) => {
-        console.log(
-          `❌ PTY process inside Docker exited with code: ${exitCode}`
-        );
+        console.log(`❌ PTY process inside Docker exited with code: ${exitCode}`);
       });
 
       resolve(ptyProcess);
     } catch (error) {
-      console.error(
-        `❌ Error creating PTY for container ${containerId}:`,
-        error
-      );
+      console.error(`❌ Error creating PTY for container ${containerId}:`, error);
       reject(error);
     }
   });
 }
 
-/**
- * 📌 Resize PTY process
- */
-export const resizeTerminal = (
-  ptyProcess: IPty,
-  cols: number,
-  rows: number
-) => {
+export const resizeTerminal = (ptyProcess: IPty, cols: number, rows: number) => {
   if (ptyProcess) {
     console.log(`📏 [PTY] Resizing container terminal to ${cols}x${rows}`);
     ptyProcess.resize(cols, rows);
+  }
+};
+
+export const killTerminal = (ptyProcess: IPty) => {
+  if (ptyProcess) {
+    ptyProcess.kill();
+    console.log(`🛑 PTY terminated`);
   }
 };

@@ -9,9 +9,9 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.resizeTerminal = void 0;
+exports.killTerminal = exports.resizeTerminal = void 0;
 exports.createPtyProcess = createPtyProcess;
-const node_pty_1 = require("node-pty");
+const node_pty_1 = require("node-pty"); // Ensure IPty is imported correctly
 function createPtyProcess(containerId) {
     return __awaiter(this, void 0, void 0, function* () {
         return new Promise((resolve, reject) => {
@@ -31,9 +31,6 @@ function createPtyProcess(containerId) {
                     cwd: "/",
                     env: Object.assign(Object.assign({}, process.env), { TERM: "xterm-256color" }),
                 });
-                // ptyProcess.onData((data) => {
-                //   console.log(`[PTY Docker Output]:`, JSON.stringify(data));
-                // });
                 ptyProcess.onExit(({ exitCode }) => {
                     console.log(`❌ PTY process inside Docker exited with code: ${exitCode}`);
                 });
@@ -46,9 +43,6 @@ function createPtyProcess(containerId) {
         });
     });
 }
-/**
- * 📌 Resize PTY process
- */
 const resizeTerminal = (ptyProcess, cols, rows) => {
     if (ptyProcess) {
         console.log(`📏 [PTY] Resizing container terminal to ${cols}x${rows}`);
@@ -56,3 +50,10 @@ const resizeTerminal = (ptyProcess, cols, rows) => {
     }
 };
 exports.resizeTerminal = resizeTerminal;
+const killTerminal = (ptyProcess) => {
+    if (ptyProcess) {
+        ptyProcess.kill();
+        console.log(`🛑 PTY terminated`);
+    }
+};
+exports.killTerminal = killTerminal;
