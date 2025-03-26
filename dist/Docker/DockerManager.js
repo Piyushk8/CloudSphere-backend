@@ -25,6 +25,7 @@ class DockerManager {
         this.getContainerIP = (roomId) => __awaiter(this, void 0, void 0, function* () {
             var _a;
             const containerFromRoomId = yield this.getContainer(roomId);
+            console.log("conatiner search", containerFromRoomId);
             if (!containerFromRoomId)
                 throw new Error("getContainerIP : no countainer with this room ID found");
             const container = this.docker.getContainer(containerFromRoomId === null || containerFromRoomId === void 0 ? void 0 : containerFromRoomId.id);
@@ -143,21 +144,22 @@ class DockerManager {
             const containers = yield this.docker.listContainers({ all: true });
             const roomContainers = containers.filter((c) => c.Names.some((name) => name.startsWith("/room-")));
             const upstreamsAndLocations = yield Promise.all(roomContainers.map((c) => __awaiter(this, void 0, void 0, function* () {
-                const roomId = c.Names[0].replace("/room-", "");
+                const roomId = c.Names[0].replace("/room-", "").replace("/room-room-", ""); // Handle both cases
                 const { processes } = yield this.getContainerProcesses(roomId);
-                const upstreams = processes.map((proc) => `
-      upstream room_${roomId}_port_${proc.port} {
-          server room-${roomId}:${proc.port};
+                const ports = processes.map((proc) => proc.port);
+                const upstreams = ports.map((port) => `
+      upstream room_${roomId}_port_${port} {
+          server room-${roomId}:${port};
       }`).join("\n");
-                const locations = processes.map((proc) => `
-      location /room-${roomId}/${proc.port}/ {
-          proxy_pass http://room_${roomId}_port_${proc.port}/;
+                const locations = ports.map((port) => `
+      location /room-${roomId}/${port}/ {
+          proxy_pass http://room_${roomId}_port_${port}/;
           proxy_set_header Host $host;
           proxy_set_header X-Real-IP $remote_addr;
       }`).join("\n");
-                const defaultLocation = processes.length > 0 ? `
+                const defaultLocation = ports.length > 0 ? `
       location /room-${roomId}/ {
-          proxy_pass http://room_${roomId}_port_${processes[0].port}/;
+          proxy_pass http://room_${roomId}_port_${ports[0]}/;
           proxy_set_header Host $host;
           proxy_set_header X-Real-IP $remote_addr;
       }` : "";
@@ -170,29 +172,27 @@ class DockerManager {
   }
   http {
       ${upstreamsAndLocations.map((item) => item.upstreams).join("\n")}
-  
       server {
           listen 80;
-  
           ${upstreamsAndLocations.map((item) => item.defaultLocation + item.locations).join("\n")}
-  
           location / {
-              return 404;
+              return 404 "No room or port specified";
           }
       }
   }
     `;
             const nginxConfigPath = path_1.default.resolve("nginx.conf");
             yield promises_1.default.writeFile(nginxConfigPath, config);
+            console.log("Generated nginx.conf:", config);
             try {
                 const nginxContainerId = this.nginxContainer.id;
                 const nginxInfo = yield this.nginxContainer.inspect();
                 if (!nginxInfo.State.Running) {
                     yield this.nginxContainer.start();
-                    console.log("✅ Restarted Nginx proxy for config reload");
+                    console.log("✅ Restarted Nginx proxy");
                 }
                 yield this.execInContainerwithID(nginxContainerId, "nginx -s reload");
-                console.log("✅ Nginx config updated and reloaded");
+                console.log("✅ Nginx config reloaded");
             }
             catch (error) {
                 console.error("❌ Failed to reload Nginx:", error);
@@ -388,7 +388,8 @@ class DockerManager {
             try {
                 const containers = yield this.docker.listContainers({ all: true });
                 const found = containers.filter((c) => c.Names.includes(`/room-${roomId}`));
-                // console.log("found",found)
+                // console.log("foinfound)
+                console.log("found", found);
                 if (!found) {
                     console.error(`🚨 Container not found for roomId: ${roomId}`);
                     return null;

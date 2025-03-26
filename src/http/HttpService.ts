@@ -11,7 +11,7 @@ import { promisify } from "util";
 import {unlinkSync, writeFileSync} from "fs"
 import {  watchRoomFiles } from "../Websocket/Filewatcher";
 import axios from "axios";
-import { createProxyMiddleware } from "http-proxy-middleware";
+
 const app = express();
 const execPromise = promisify(exec);
 
