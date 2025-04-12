@@ -37,7 +37,10 @@ class DockerManager {
         return __awaiter(this, void 0, void 0, function* () {
             const networks = yield this.docker.listNetworks();
             if (!networks.some((n) => n.Name === this.networkName)) {
-                yield this.docker.createNetwork({ Name: this.networkName, Driver: "bridge" });
+                yield this.docker.createNetwork({
+                    Name: this.networkName,
+                    Driver: "bridge",
+                });
                 console.log(`✅ Created network '${this.networkName}'`);
             }
             const containers = yield this.docker.listContainers({ all: true });
@@ -145,17 +148,30 @@ ${configParts.map((p) => p.defaultLocation + p.locations).join("\n")}
                 OpenStdin: true,
                 Env: envVars,
                 ExposedPorts: { [`${exposedPort}/tcp`]: {} },
+                WorkingDir: "/workspace",
                 HostConfig: {
-                    PortBindings: { [`${exposedPort}/tcp`]: [{ HostPort: String(hostPort) }] },
-                    Binds: [`${workspacePath}:/workspace`],
+                    PortBindings: {
+                        [`${exposedPort}/tcp`]: [{ HostPort: String(hostPort) }],
+                    },
                     NetworkMode: this.networkName,
                     AutoRemove: true,
                 },
             });
+            console.log("⚙️ Creating container...");
             yield container.start();
-            this.activeContainers[roomId] = container.id;
+            console.log("🚀 Started container:", container.id);
+            console.log("📦 Installing packages...");
             yield this.fileSystemService.execInContainer(container.id, "apt update && apt install -y lsof grep tree socat");
-            yield this.updateNginxConfig();
+            console.log("✅ Packages installed");
+            console.log("🔁 Updating NGINX...");
+            try {
+                yield this.updateNginxConfig();
+                console.log("✅ NGINX updated");
+            }
+            catch (err) {
+                console.error("❌ Error updating NGINX:", err);
+            }
+            console.log("📤 Returning:", { containerId: container.id, hostPort });
             return { containerId: container.id, hostPort };
         });
     }
@@ -201,7 +217,10 @@ ${configParts.map((p) => p.defaultLocation + p.locations).join("\n")}
                 try {
                     const activePorts = yield this.getActivePorts(containerId);
                     if (activePorts.length > 0) {
-                        __1.webSocketServiceInstance.io.to(roomId).emit("active-ports", { containerId, ports: activePorts });
+                        __1.webSocketServiceInstance.io
+                            .to(roomId)
+                            .emit("active-ports", { containerId, ports: activePorts });
+                        this.updateNginxConfig();
                         console.log(`📤 Emitted active-ports for ${roomId}:`, activePorts);
                     }
                     else {
@@ -273,13 +292,21 @@ ${configParts.map((p) => p.defaultLocation + p.locations).join("\n")}
     }
     readFile(roomId, filename) {
         return __awaiter(this, void 0, void 0, function* () {
-            return this.fileSystemService.execInContainer(this.activeContainers[roomId], `cat /workspace/${filename}`);
+            const container = yield this.getContainer(roomId);
+            if (!container || !(container === null || container === void 0 ? void 0 : container.id))
+                throw new Error("not found container");
+            return this.fileSystemService.execInContainer(container === null || container === void 0 ? void 0 : container.id, `cat /${filename}`);
         });
     }
     writeFile(roomId, filename, content) {
         return __awaiter(this, void 0, void 0, function* () {
+            const container = yield this.getContainer(roomId);
+            if (!container || !(container === null || container === void 0 ? void 0 : container.id))
+                throw new Error("not found container");
             const escaped = content.replace(/'/g, "'\\''");
-            yield this.fileSystemService.execInContainer(this.activeContainers[roomId], `printf '%s' '${escaped}' > /workspace/${filename}`);
+            yield this.fileSystemService.execInContainer(
+            // this.activeContainers[roomId],/
+            container === null || container === void 0 ? void 0 : container.id, `printf '%s' '${escaped}' > /${filename}`);
         });
     }
     deleteFile(roomId, filename) {

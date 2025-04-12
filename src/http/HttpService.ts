@@ -9,7 +9,6 @@ import fs from "fs/promises";
 import path from "path";
 import { exec } from "child_process";
 import { promisify } from "util";
-import { unlinkSync, writeFileSync } from "fs";
 
 const execPromise = promisify(exec);
 
@@ -22,7 +21,7 @@ export class HttpService {
   constructor() {
     this.app = express();
     this.server = createServer(this.app);
-    this.websocketService = new WebSocketService(this.server);
+    this.websocketService = new WebSocketService(this.server,);
     this.dockerManager = new DockerManager();
 
     this.app.use(express.json());
@@ -72,18 +71,19 @@ export class HttpService {
         const workspacePath = path.resolve("storage", roomId);
         await fs.mkdir(workspacePath, { recursive: true });
         
+        console.log("creating")
         const containerOptions: ContainerOptions = {
           image: languageConfig.image,
           roomId,
           exposedPort: languageConfig.port,
           envVars: languageConfig.envVars,
         };
-        
+        console.log("creating")
         const { containerId, hostPort } = await this.dockerManager.createContainer(containerOptions);
         if (!containerId || !hostPort) {
           return res.status(500).json({ error: "Failed to create container" });
         }
-        
+        console.log(containerId,hostPort)
         res.json({ message: "Room created successfully", roomId, containerId, hostPort, workspacePath });
       } catch (error) {
         console.error("Error creating room:", error);
@@ -95,25 +95,12 @@ export class HttpService {
     //@ts-ignore
     this.app.post("/read-file", async (req: Request, res: Response) => {
       try {
-        const { containerId, path: filePath } = req.body;
+        const { containerId, path: filePath ,roomId} = req.body;
         if (!filePath || !containerId) {
           return res.status(400).json({ error: "Invalid file path or containerId" });
         }
-
-        const checkOutput = await execPromise(
-          `docker exec ${containerId} sh -c "[ -f '${filePath}' ] && echo file || ([ -d '${filePath}' ] && echo directory || echo notfound)"`
-        );
-        const fileType = checkOutput.stdout.trim();
-
-        if (fileType === "directory") {
-          return res.status(400).json({ error: "Path is a directory, not a file" });
-        }
-        if (fileType === "notfound") {
-          return res.status(404).json({ error: "File not found" });
-        }
-
-        const content = await execPromise(`docker exec ${containerId} cat '${filePath}'`);
-        res.json({ content: content.stdout });
+        const output = await this.dockerManager.readFile(roomId,filePath)
+        res.json({ content: output });
       } catch (error) {
         console.error("Error reading file:", error);
         res.status(500).json({ error: "Failed to read file" });
@@ -124,19 +111,17 @@ export class HttpService {
     //@ts-ignore
     this.app.post("/save-file", async (req: Request, res: Response) => {
       try {
-        const { containerId, path: filePath, content } = req.body;
-        if (!containerId || !filePath || typeof content !== "string") {
+        const { containerId, path: filePath, content, roomId } = req.body;
+        if (!containerId || !filePath || typeof content !== "string" || !roomId) {
           return res.status(400).json({ error: "Invalid parameters" });
         }
-
-        const dirPath = path.dirname(filePath);
-        await execPromise(`docker exec ${containerId} mkdir -p '${dirPath}'`);
-
-        const tempFile = path.join(__dirname, "temp.txt");
-        writeFileSync(tempFile, content, "utf8");
-        await execPromise(`docker cp ${tempFile} ${containerId}:'${filePath}'`);
-        unlinkSync(tempFile);
-
+    
+        console.log(`Saving file: ${filePath} in container ${containerId} for room ${roomId}`);
+    
+        const dockerManager = new DockerManager(); // Should be injected or singleton in practice
+        await dockerManager.writeFile(roomId, filePath, content);
+    
+        console.log(`File ${filePath} saved successfully`);
         res.json({ success: true });
       } catch (error) {
         console.error("Failed to save file:", error);

@@ -29,6 +29,7 @@ export class FileSystemService {
         Cmd: ["sh", "-c", command],
         AttachStdout: true,
         AttachStderr: true,
+        Tty:false
       });
 
       const stream = await exec.start({ hijack: true, stdin: false });

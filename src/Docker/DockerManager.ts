@@ -17,15 +17,13 @@ export interface ContainerOptions {
 }
 
 export class DockerManager {
-  private docker: Docker;
+  public docker: Docker;
   private activeContainers: Record<string, string>;
   private roomFileTrees: Map<string, FileNode[]>;
   private networkName = "cloud_ide_network";
   private nginxContainer: Docker.Container | null = null;
   private fileSystemService: FileSystemService;
   // private wsservice:WebSocketService;
-  
-
 
   constructor() {
     this.docker = new Docker();
@@ -41,12 +39,17 @@ export class DockerManager {
   private async initializeNginxProxy(): Promise<void> {
     const networks = await this.docker.listNetworks();
     if (!networks.some((n) => n.Name === this.networkName)) {
-      await this.docker.createNetwork({ Name: this.networkName, Driver: "bridge" });
+      await this.docker.createNetwork({
+        Name: this.networkName,
+        Driver: "bridge",
+      });
       console.log(`✅ Created network '${this.networkName}'`);
     }
 
     const containers = await this.docker.listContainers({ all: true });
-    const nginxContainer = containers.find((c) => c.Names.includes("/nginx_proxy"));
+    const nginxContainer = containers.find((c) =>
+      c.Names.includes("/nginx_proxy")
+    );
 
     if (!nginxContainer) {
       await this.startNginxContainer();
@@ -162,7 +165,9 @@ ${configParts.map((p) => p.defaultLocation + p.locations).join("\n")}
     console.log("✅ Nginx config reloaded");
   }
 
-  async createContainer(options: ContainerOptions): Promise<{ containerId: string; hostPort: number }> {
+  async createContainer(
+    options: ContainerOptions
+  ): Promise<{ containerId: string; hostPort: number }> {
     const { image, roomId, exposedPort = 8080, envVars = [] } = options;
     const hostPort = await this.getAvailablePort(4000, 5000);
     const workspacePath = path.resolve("storage", roomId);
@@ -176,24 +181,38 @@ ${configParts.map((p) => p.defaultLocation + p.locations).join("\n")}
       OpenStdin: true,
       Env: envVars,
       ExposedPorts: { [`${exposedPort}/tcp`]: {} },
+      WorkingDir:"/workspace",
       HostConfig: {
-        PortBindings: { [`${exposedPort}/tcp`]: [{ HostPort: String(hostPort) }] },
-        Binds: [`${workspacePath}:/workspace`],
+        PortBindings: {
+          [`${exposedPort}/tcp`]: [{ HostPort: String(hostPort) }],
+        },
         NetworkMode: this.networkName,
         AutoRemove: true,
       },
     });
 
+    console.log("⚙️ Creating container...");
     await container.start();
-    this.activeContainers[roomId] = container.id;
-
+    console.log("🚀 Started container:", container.id);
+    
+    console.log("📦 Installing packages...");
     await this.fileSystemService.execInContainer(
       container.id,
-      "apt update && apt install -y lsof grep tree socat"
+       "apt update && apt install -y lsof grep tree socat"
     );
-    await this.updateNginxConfig();
-
+    console.log("✅ Packages installed");
+    
+    console.log("🔁 Updating NGINX...");
+    try {
+      await this.updateNginxConfig();
+      console.log("✅ NGINX updated");
+    } catch (err) {
+      console.error("❌ Error updating NGINX:", err);
+    }
+    
+    console.log("📤 Returning:", { containerId: container.id, hostPort });
     return { containerId: container.id, hostPort };
+    
   }
 
   async getActivePorts(containerId: string): Promise<string[]> {
@@ -236,15 +255,21 @@ ${configParts.map((p) => p.defaultLocation + p.locations).join("\n")}
   }
 
   async monitorPorts(roomId: string, containerId: string) {
-    console.log(`🔍 Starting port monitoring for room: ${roomId}, container: ${containerId}`);
+    console.log(
+      `🔍 Starting port monitoring for room: ${roomId}, container: ${containerId}`
+    );
     const container = await this.getContainer(roomId);
-    if (!container || !container?.id) throw new Error("no container found for monitoring");
-  
+    if (!container || !container?.id)
+      throw new Error("no container found for monitoring");
+
     const monitor = async () => {
       try {
         const activePorts = await this.getActivePorts(containerId);
         if (activePorts.length > 0) {
-          webSocketServiceInstance.io.to(roomId).emit("active-ports", { containerId, ports: activePorts });
+          webSocketServiceInstance.io
+            .to(roomId)
+            .emit("active-ports", { containerId, ports: activePorts });
+          this.updateNginxConfig();
           console.log(`📤 Emitted active-ports for ${roomId}:`, activePorts);
         } else {
           console.log(`ℹ️ No active ports detected for ${roomId}`);
@@ -253,7 +278,7 @@ ${configParts.map((p) => p.defaultLocation + p.locations).join("\n")}
         console.error(`❌ Error monitoring ports for ${roomId}:`, error);
       }
     };
-  
+
     await monitor();
     const interval = setInterval(monitor, 5000);
     container.wait(() => clearInterval(interval));
@@ -311,17 +336,27 @@ ${configParts.map((p) => p.defaultLocation + p.locations).join("\n")}
   }
 
   async readFile(roomId: string, filename: string): Promise<string> {
+    const container = await this.getContainer(roomId);
+    if (!container || !container?.id) throw new Error("not found container");
+
     return this.fileSystemService.execInContainer(
-      this.activeContainers[roomId],
-      `cat /workspace/${filename}`
+      container?.id,
+      `cat /${filename}`
     );
   }
 
-  async writeFile(roomId: string, filename: string, content: string): Promise<void> {
+  async writeFile(
+    roomId: string,
+    filename: string,
+    content: string
+  ): Promise<void> {
+    const container = await this.getContainer(roomId);
+    if (!container || !container?.id) throw new Error("not found container");
     const escaped = content.replace(/'/g, "'\\''");
     await this.fileSystemService.execInContainer(
-      this.activeContainers[roomId],
-      `printf '%s' '${escaped}' > /workspace/${filename}`
+      // this.activeContainers[roomId],/
+      container?.id,
+      `printf '%s' '${escaped}' > /${filename}`
     );
   }
 
@@ -344,7 +379,8 @@ ${configParts.map((p) => p.defaultLocation + p.locations).join("\n")}
     const container = await this.getContainer(roomId);
     if (!container) return false;
 
-    const currentTree = this.roomFileTrees.get(roomId) || (await this.getFileTree(roomId));
+    const currentTree =
+      this.roomFileTrees.get(roomId) || (await this.getFileTree(roomId));
     const { toCreate, toDelete } = diffTrees(currentTree, newTree);
 
     await this.applyChangesToContainer(container.id, toCreate, toDelete);
@@ -358,7 +394,10 @@ ${configParts.map((p) => p.defaultLocation + p.locations).join("\n")}
     toDelete: string[]
   ): Promise<void> {
     for (const path of toDelete) {
-      await this.fileSystemService.execInContainer(containerId, `rm -rf ${path}`);
+      await this.fileSystemService.execInContainer(
+        containerId,
+        `rm -rf ${path}`
+      );
     }
     for (const path of toCreate) {
       const isFolder = path.endsWith("/");
@@ -370,7 +409,10 @@ ${configParts.map((p) => p.defaultLocation + p.locations).join("\n")}
   }
 }
 
-function diffTrees(currentTree: FileNode[], newTree: FileNode[]): { toCreate: string[]; toDelete: string[] } {
+function diffTrees(
+  currentTree: FileNode[],
+  newTree: FileNode[]
+): { toCreate: string[]; toDelete: string[] } {
   const currentPaths = new Set(flattenTree(currentTree));
   const newPaths = new Set(flattenTree(newTree));
   return {

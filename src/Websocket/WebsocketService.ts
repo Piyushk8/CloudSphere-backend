@@ -3,25 +3,26 @@ import { Server as HttpServer } from "http";
 import { DockerManager } from "../Docker/DockerManager";
 import { createPtyProcess, resizeTerminal, killTerminal } from "../terminal/pty";
 import path from "path";
-import { exec } from "child_process";
-import { promisify } from "util";
 import { IPty } from "node-pty";
-
-const execPromise = promisify(exec);
 
 export class WebSocketService {
   public io: SocketServer;
   private dockerManager: DockerManager;
-  private activeTerminals: Map<string, IPty>;
+  private activeTerminals: Map<string, { pty: IPty; containerId: string }>;
   private roomUsers: Map<string, Set<string>>;
-  private monitoredRooms: Set<string>; // Track rooms with active monitoring
+  private monitoredRooms: Set<string>;
+  private heartbeatInterval: NodeJS.Timeout | null;
 
   constructor(server: HttpServer) {
     this.io = new SocketServer(server, { cors: { origin: "*" } });
     this.dockerManager = new DockerManager();
     this.activeTerminals = new Map();
     this.roomUsers = new Map();
-    this.monitoredRooms = new Set(); // Prevent duplicate monitoring
+    this.monitoredRooms = new Set();
+    this.heartbeatInterval = null;
+
+    // Start heartbeat to check container status
+    this.startHeartbeat();
 
     this.io.on("connection", (socket: Socket) => {
       console.log(`👤 User connected: ${socket.id}`);
@@ -57,7 +58,6 @@ export class WebSocketService {
           }
           socket.emit("roomJoined", { roomId, containerId: container.id });
 
-          // Start port monitoring if not already active
           if (!this.monitoredRooms.has(roomId)) {
             this.dockerManager.monitorPorts(roomId, container.id);
             this.monitoredRooms.add(roomId);
@@ -75,28 +75,30 @@ export class WebSocketService {
             throw new Error(`🚨 Container not found for roomId: ${roomId}`);
           }
           const key = `${roomId}:${terminalId}`;
-          if (!this.activeTerminals.has(key)) {
-            const ptyProcess = await createPtyProcess(container.id);
-            this.activeTerminals.set(key, ptyProcess);
 
-            ptyProcess.onData((data) => {
-              console.log(`[PTY Output ${key}]:`, JSON.stringify(data));
-              this.io.to(roomId).emit("terminal:output", { terminalId, data: data.toString() });
-            });
-
-            ptyProcess.onExit(({ exitCode }) => {
-              console.log(`❌ PTY ${key} exited with code: ${exitCode}`);
-              this.io.to(roomId).emit("terminal:exit", { terminalId });
-              this.activeTerminals.delete(key);
-            });
-
-            // ptyProcess.on("error", (error) => {
-            //   console.error(`❌ PTY ${key} error:`, error);
-            //   socket.emit("error", `Terminal ${terminalId} encountered an error`);
-            // });
-
-            console.log(`✅ Terminal ${key} created`);
+          // Check if terminal already exists for reconnect
+          if (this.activeTerminals.has(key)) {
+            console.log(`🔄 Reconnecting to existing terminal ${key}`);
+            socket.emit("terminalCreated", { roomId, terminalId });
+            return;
           }
+
+          // Create new PTY
+          const ptyProcess = await createPtyProcess(container.id);
+          this.activeTerminals.set(key, { pty: ptyProcess, containerId: container.id });
+          console.log(`✅ Terminal created: ${key} | Container: ${container.id}`);
+
+          ptyProcess.onData((data) => {
+            console.log(`[PTY Output ${key}]:`, JSON.stringify(data));
+            this.io.to(roomId).emit("terminal:output", { terminalId, data: data.toString() });
+          });
+
+          ptyProcess.onExit(({ exitCode }) => {
+            console.log(`❌ PTY ${key} exited with code: ${exitCode}`);
+            this.io.to(roomId).emit("terminal:exit", { terminalId });
+            this.activeTerminals.delete(key);
+          });
+
           socket.emit("terminalCreated", { roomId, terminalId });
         } catch (error) {
           console.error(`❌ Error creating terminal ${terminalId}:`, error);
@@ -106,20 +108,20 @@ export class WebSocketService {
 
       socket.on("terminal:write", ({ roomId, terminalId, data }) => {
         const key = `${roomId}:${terminalId}`;
-        const pty = this.activeTerminals.get(key);
-        if (!pty) {
+        const terminal = this.activeTerminals.get(key);
+        if (!terminal) {
           console.warn(`⚠️ No active PTY for ${key}`);
           socket.emit("error", `No terminal found for ${terminalId}`);
           return;
         }
         console.log(`📥 Writing to ${key}:`, JSON.stringify(data));
-        pty.write(data);
+        terminal.pty.write(data);
       });
 
       socket.on("terminal:resize", ({ roomId, terminalId, cols, rows }) => {
         const key = `${roomId}:${terminalId}`;
-        const pty = this.activeTerminals.get(key);
-        if (!pty) {
+        const terminal = this.activeTerminals.get(key);
+        if (!terminal) {
           console.warn(`⚠️ No active PTY for ${key}`);
           return;
         }
@@ -127,9 +129,9 @@ export class WebSocketService {
           console.warn(`⚠️ Ignoring invalid size for ${key}: ${cols}x${rows}`);
           return;
         }
-        if (pty.cols !== cols || pty.rows !== rows) {
+        if (terminal.pty.cols !== cols || terminal.pty.rows !== rows) {
           console.log(`📏 Resizing PTY ${key} to ${cols}x${rows}`);
-          resizeTerminal(pty, cols, rows);
+          resizeTerminal(terminal.pty, cols, rows);
         }
       });
 
@@ -138,21 +140,43 @@ export class WebSocketService {
         this.roomUsers.forEach((users, roomId) => {
           if (users.has(socket.id)) {
             users.delete(socket.id);
+            // Don’t kill PTYs here; let heartbeat handle cleanup
             if (users.size === 0) {
-              console.log(`🛑 No more users in room ${roomId}, shutting down PTYs`);
-              this.activeTerminals.forEach((pty, key) => {
-                if (key.startsWith(`${roomId}:`)) {
-                  killTerminal(pty);
-                  this.activeTerminals.delete(key);
-                }
-              });
+              console.log(`🛑 No more users in room ${roomId}, awaiting heartbeat cleanup`);
               this.roomUsers.delete(roomId);
-              this.monitoredRooms.delete(roomId); // Cleanup monitoring
+              this.monitoredRooms.delete(roomId);
             }
           }
         });
       });
     });
+  }
+
+  private async startHeartbeat() {
+    this.heartbeatInterval = setInterval(async () => {
+      console.log(`🩺 Running heartbeat check for ${this.activeTerminals.size} terminals`);
+      for (const [key, { pty, containerId }] of this.activeTerminals) {
+        const [roomId, terminalId] = key.split(":");
+        try {
+          const container = this.dockerManager.docker.getContainer(containerId);
+          await container.inspect();
+          console.log(`✅ Container ${containerId} for terminal ${key} is running`);
+        } catch (err) {
+          console.warn(`❌ Container ${containerId} for terminal ${key} not found, cleaning up`);
+          killTerminal(pty);
+          this.activeTerminals.delete(key);
+          this.io.to(roomId).emit("terminal:exit", { terminalId });
+        }
+      }
+    }, 30000); // Check every 30 seconds
+  }
+
+  private stopHeartbeat() {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+      console.log(`🛑 Heartbeat stopped`);
+    }
   }
 
   public async emitToRoom(roomId: string, event: string, tree: any) {
@@ -165,5 +189,15 @@ export class WebSocketService {
     }
 
     this.io.to(sanitizedRoomId).emit("directory:changed", tree);
+  }
+
+  // Cleanup on server shutdown
+  public async shutdown() {
+    this.stopHeartbeat();
+    for (const [key, { pty }] of this.activeTerminals) {
+      killTerminal(pty);
+      this.activeTerminals.delete(key);
+    }
+    console.log(`🧹 WebSocketService shutdown complete`);
   }
 }

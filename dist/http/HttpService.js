@@ -24,7 +24,6 @@ const promises_1 = __importDefault(require("fs/promises"));
 const path_1 = __importDefault(require("path"));
 const child_process_1 = require("child_process");
 const util_1 = require("util");
-const fs_1 = require("fs");
 const execPromise = (0, util_1.promisify)(child_process_1.exec);
 class HttpService {
     constructor() {
@@ -72,16 +71,19 @@ class HttpService {
                 const roomId = `room-${Date.now()}-${(0, crypto_1.randomUUID)()}`;
                 const workspacePath = path_1.default.resolve("storage", roomId);
                 yield promises_1.default.mkdir(workspacePath, { recursive: true });
+                console.log("creating");
                 const containerOptions = {
                     image: languageConfig.image,
                     roomId,
                     exposedPort: languageConfig.port,
                     envVars: languageConfig.envVars,
                 };
+                console.log("creating");
                 const { containerId, hostPort } = yield this.dockerManager.createContainer(containerOptions);
                 if (!containerId || !hostPort) {
                     return res.status(500).json({ error: "Failed to create container" });
                 }
+                console.log(containerId, hostPort);
                 res.json({ message: "Room created successfully", roomId, containerId, hostPort, workspacePath });
             }
             catch (error) {
@@ -93,20 +95,12 @@ class HttpService {
         //@ts-ignore
         this.app.post("/read-file", (req, res) => __awaiter(this, void 0, void 0, function* () {
             try {
-                const { containerId, path: filePath } = req.body;
+                const { containerId, path: filePath, roomId } = req.body;
                 if (!filePath || !containerId) {
                     return res.status(400).json({ error: "Invalid file path or containerId" });
                 }
-                const checkOutput = yield execPromise(`docker exec ${containerId} sh -c "[ -f '${filePath}' ] && echo file || ([ -d '${filePath}' ] && echo directory || echo notfound)"`);
-                const fileType = checkOutput.stdout.trim();
-                if (fileType === "directory") {
-                    return res.status(400).json({ error: "Path is a directory, not a file" });
-                }
-                if (fileType === "notfound") {
-                    return res.status(404).json({ error: "File not found" });
-                }
-                const content = yield execPromise(`docker exec ${containerId} cat '${filePath}'`);
-                res.json({ content: content.stdout });
+                const output = yield this.dockerManager.readFile(roomId, filePath);
+                res.json({ content: output });
             }
             catch (error) {
                 console.error("Error reading file:", error);
@@ -117,16 +111,14 @@ class HttpService {
         //@ts-ignore
         this.app.post("/save-file", (req, res) => __awaiter(this, void 0, void 0, function* () {
             try {
-                const { containerId, path: filePath, content } = req.body;
-                if (!containerId || !filePath || typeof content !== "string") {
+                const { containerId, path: filePath, content, roomId } = req.body;
+                if (!containerId || !filePath || typeof content !== "string" || !roomId) {
                     return res.status(400).json({ error: "Invalid parameters" });
                 }
-                const dirPath = path_1.default.dirname(filePath);
-                yield execPromise(`docker exec ${containerId} mkdir -p '${dirPath}'`);
-                const tempFile = path_1.default.join(__dirname, "temp.txt");
-                (0, fs_1.writeFileSync)(tempFile, content, "utf8");
-                yield execPromise(`docker cp ${tempFile} ${containerId}:'${filePath}'`);
-                (0, fs_1.unlinkSync)(tempFile);
+                console.log(`Saving file: ${filePath} in container ${containerId} for room ${roomId}`);
+                const dockerManager = new DockerManager_1.DockerManager(); // Should be injected or singleton in practice
+                yield dockerManager.writeFile(roomId, filePath, content);
+                console.log(`File ${filePath} saved successfully`);
                 res.json({ success: true });
             }
             catch (error) {
