@@ -1,5 +1,6 @@
-/dist
-/node_modules
-/storage
 .env
 nginx.conf
+# .gitignore
+node_modules/
+dist/
+storage/
