@@ -17,6 +17,7 @@ const socket_io_1 = require("socket.io");
 const DockerManager_1 = require("../Docker/DockerManager");
 const pty_1 = require("../terminal/pty");
 const path_1 = __importDefault(require("path"));
+const watcher_1 = require("./watcher");
 class WebSocketService {
     constructor(server) {
         this.io = new socket_io_1.Server(server, { cors: { origin: "*" } });
@@ -38,6 +39,7 @@ class WebSocketService {
                         exposedPort: 8080,
                     });
                     socket.emit("roomCreated", { roomId, containerId, hostPort });
+                    yield (0, watcher_1.watchRoomFiles)(roomId);
                     console.log(`✅ Room created: ${roomId} | Container: ${containerId}`);
                 }
                 catch (error) {
@@ -58,6 +60,7 @@ class WebSocketService {
                         throw new Error(`🚨 Container not found for roomId: ${roomId}`);
                     }
                     socket.emit("roomJoined", { roomId, containerId: container.id });
+                    yield (0, watcher_1.watchRoomFiles)(roomId);
                     if (!this.monitoredRooms.has(roomId)) {
                         this.dockerManager.monitorPorts(roomId, container.id);
                         this.monitoredRooms.add(roomId);
@@ -83,11 +86,16 @@ class WebSocketService {
                     }
                     // Create new PTY
                     const ptyProcess = yield (0, pty_1.createPtyProcess)(container.id);
-                    this.activeTerminals.set(key, { pty: ptyProcess, containerId: container.id });
+                    this.activeTerminals.set(key, {
+                        pty: ptyProcess,
+                        containerId: container.id,
+                    });
                     console.log(`✅ Terminal created: ${key} | Container: ${container.id}`);
                     ptyProcess.onData((data) => {
-                        console.log(`[PTY Output ${key}]:`, JSON.stringify(data));
-                        this.io.to(roomId).emit("terminal:output", { terminalId, data: data.toString() });
+                        // console.log(`[PTY Output ${key}]:`, JSON.stringify(data));
+                        this.io
+                            .to(roomId)
+                            .emit("terminal:output", { terminalId, data: data.toString() });
                     });
                     ptyProcess.onExit(({ exitCode }) => {
                         console.log(`❌ PTY ${key} exited with code: ${exitCode}`);
@@ -109,7 +117,7 @@ class WebSocketService {
                     socket.emit("error", `No terminal found for ${terminalId}`);
                     return;
                 }
-                console.log(`📥 Writing to ${key}:`, JSON.stringify(data));
+                // console.log(`📥 Writing to ${key}:`, JSON.stringify(data));
                 terminal.pty.write(data);
             });
             socket.on("terminal:resize", ({ roomId, terminalId, cols, rows }) => {
@@ -133,11 +141,12 @@ class WebSocketService {
                 this.roomUsers.forEach((users, roomId) => {
                     if (users.has(socket.id)) {
                         users.delete(socket.id);
-                        // Don’t kill PTYs here; let heartbeat handle cleanup
+                        // Doesn’t kill PTYs here; let heartbeat handle cleanup
                         if (users.size === 0) {
                             console.log(`🛑 No more users in room ${roomId}, awaiting heartbeat cleanup`);
                             this.roomUsers.delete(roomId);
                             this.monitoredRooms.delete(roomId);
+                            (0, watcher_1.stopWatchingRoomFiles)(roomId);
                         }
                     }
                 });
@@ -162,7 +171,7 @@ class WebSocketService {
                         this.io.to(roomId).emit("terminal:exit", { terminalId });
                     }
                 }
-            }), 30000); // Check every 30 seconds
+            }), 30000); // 30 sec health check
         });
     }
     stopHeartbeat() {

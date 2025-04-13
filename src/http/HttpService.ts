@@ -3,7 +3,6 @@ import { createServer } from "http";
 import cors from "cors";
 import { DockerManager, ContainerOptions } from "../Docker/DockerManager";
 import { WebSocketService } from "../Websocket/WebsocketService";
-import { watchRoomFiles, stopWatchingRoomFiles } from "../Websocket/Filewatcher";
 import { randomUUID } from "crypto";
 import fs from "fs/promises";
 import path from "path";
@@ -43,8 +42,6 @@ export class HttpService {
         }
 
         // Start watching files (will skip if already watching)
-        await watchRoomFiles(roomId);
-
         const transformedTree = assignIds(fileTree);
         res.json({ transformedTree });
       } catch (error) {

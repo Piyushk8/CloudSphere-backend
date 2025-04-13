@@ -22,7 +22,7 @@ export class DockerManager {
   private roomFileTrees: Map<string, FileNode[]>;
   private networkName = "cloud_ide_network";
   private nginxContainer: Docker.Container | null = null;
-  private fileSystemService: FileSystemService;
+  public fileSystemService: FileSystemService;
   // private wsservice:WebSocketService;
 
   constructor() {
@@ -191,26 +191,17 @@ ${configParts.map((p) => p.defaultLocation + p.locations).join("\n")}
       },
     });
 
-    console.log("⚙️ Creating container...");
     await container.start();
-    console.log("🚀 Started container:", container.id);
     
-    console.log("📦 Installing packages...");
     await this.fileSystemService.execInContainer(
       container.id,
        "apt update && apt install -y lsof grep tree socat"
     );
-    console.log("✅ Packages installed");
-    
-    console.log("🔁 Updating NGINX...");
     try {
       await this.updateNginxConfig();
-      console.log("✅ NGINX updated");
     } catch (err) {
       console.error("❌ Error updating NGINX:", err);
-    }
-    
-    console.log("📤 Returning:", { containerId: container.id, hostPort });
+    }    
     return { containerId: container.id, hostPort };
     
   }
@@ -253,6 +244,20 @@ ${configParts.map((p) => p.defaultLocation + p.locations).join("\n")}
 
     return { containerIP, processes };
   }
+  async  checkHealth(containerId: string, port: number): Promise<boolean> {
+    try {
+      const output = await this.fileSystemService.execInContainer(
+        containerId,
+        `curl -s -o /dev/null -w "%{http_code}" http://localhost:${port}/health`
+      );
+      console.log("helath",output)
+      return output.trim() === "200";
+    } catch (e) {
+      return false;
+    }
+  }
+  
+
 
   async monitorPorts(roomId: string, containerId: string) {
     console.log(
@@ -266,6 +271,9 @@ ${configParts.map((p) => p.defaultLocation + p.locations).join("\n")}
       try {
         const activePorts = await this.getActivePorts(containerId);
         if (activePorts.length > 0) {
+          for(let port of activePorts){
+            this.checkHealth(containerId,parseInt(port))
+          }
           webSocketServiceInstance.io
             .to(roomId)
             .emit("active-ports", { containerId, ports: activePorts });
@@ -428,3 +436,6 @@ function flattenTree(tree: FileNode[]): string[] {
     return acc;
   }, []);
 }
+
+
+

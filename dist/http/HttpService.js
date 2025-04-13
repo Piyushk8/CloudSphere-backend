@@ -18,7 +18,6 @@ const http_1 = require("http");
 const cors_1 = __importDefault(require("cors"));
 const DockerManager_1 = require("../Docker/DockerManager");
 const WebsocketService_1 = require("../Websocket/WebsocketService");
-const Filewatcher_1 = require("../Websocket/Filewatcher");
 const crypto_1 = require("crypto");
 const promises_1 = __importDefault(require("fs/promises"));
 const path_1 = __importDefault(require("path"));
@@ -47,7 +46,6 @@ class HttpService {
                     return res.status(404).json({ error: "No file tree found for room" });
                 }
                 // Start watching files (will skip if already watching)
-                yield (0, Filewatcher_1.watchRoomFiles)(roomId);
                 const transformedTree = assignIds(fileTree);
                 res.json({ transformedTree });
             }

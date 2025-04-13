@@ -157,21 +157,14 @@ ${configParts.map((p) => p.defaultLocation + p.locations).join("\n")}
                     AutoRemove: true,
                 },
             });
-            console.log("⚙️ Creating container...");
             yield container.start();
-            console.log("🚀 Started container:", container.id);
-            console.log("📦 Installing packages...");
             yield this.fileSystemService.execInContainer(container.id, "apt update && apt install -y lsof grep tree socat");
-            console.log("✅ Packages installed");
-            console.log("🔁 Updating NGINX...");
             try {
                 yield this.updateNginxConfig();
-                console.log("✅ NGINX updated");
             }
             catch (err) {
                 console.error("❌ Error updating NGINX:", err);
             }
-            console.log("📤 Returning:", { containerId: container.id, hostPort });
             return { containerId: container.id, hostPort };
         });
     }
@@ -207,6 +200,18 @@ ${configParts.map((p) => p.defaultLocation + p.locations).join("\n")}
             return { containerIP, processes };
         });
     }
+    checkHealth(containerId, port) {
+        return __awaiter(this, void 0, void 0, function* () {
+            try {
+                const output = yield this.fileSystemService.execInContainer(containerId, `curl -s -o /dev/null -w "%{http_code}" http://localhost:${port}/health`);
+                console.log("helath", output);
+                return output.trim() === "200";
+            }
+            catch (e) {
+                return false;
+            }
+        });
+    }
     monitorPorts(roomId, containerId) {
         return __awaiter(this, void 0, void 0, function* () {
             console.log(`🔍 Starting port monitoring for room: ${roomId}, container: ${containerId}`);
@@ -217,6 +222,9 @@ ${configParts.map((p) => p.defaultLocation + p.locations).join("\n")}
                 try {
                     const activePorts = yield this.getActivePorts(containerId);
                     if (activePorts.length > 0) {
+                        for (let port of activePorts) {
+                            this.checkHealth(containerId, parseInt(port));
+                        }
                         __1.webSocketServiceInstance.io
                             .to(roomId)
                             .emit("active-ports", { containerId, ports: activePorts });
