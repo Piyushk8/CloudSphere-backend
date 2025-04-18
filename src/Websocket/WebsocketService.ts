@@ -33,6 +33,7 @@ export class WebSocketService {
       console.log(`👤 User connected: ${socket.id}`);
 
       socket.on("createRoom", async ({ image = "node:18" }) => {
+        
         try {
           const roomId = `room-${Date.now()}`;
           const { containerId, hostPort } =

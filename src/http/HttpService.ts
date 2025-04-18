@@ -8,6 +8,9 @@ import fs from "fs/promises";
 import path from "path";
 import { exec } from "child_process";
 import { promisify } from "util";
+import dotenv from 'dotenv';
+dotenv.config(); // This will load variables from .env
+import { copyFilesToContainer,streamR2FilesToContainer } from "../AWS";
 
 const execPromise = promisify(exec);
 
@@ -20,11 +23,17 @@ export class HttpService {
   constructor() {
     this.app = express();
     this.server = createServer(this.app);
-    this.websocketService = new WebSocketService(this.server,);
+    this.websocketService = new WebSocketService(this.server);
     this.dockerManager = new DockerManager();
 
     this.app.use(express.json());
-    this.app.use(cors({ origin: "http://localhost:5173", methods: ["GET", "POST"], credentials: true }));
+    this.app.use(
+      cors({
+        origin: "http://localhost:5173",
+        methods: ["GET", "POST"],
+        credentials: true,
+      })
+    );
 
     // Test API
     this.app.get("/", (req: Request, res: Response) => {
@@ -56,32 +65,47 @@ export class HttpService {
       try {
         const { language } = req.body;
         if (!language) {
-          return res.status(400).json({ error: "Language selection is required" });
+          return res
+            .status(400)
+            .json({ error: "Language selection is required" });
         }
-        
+        console.log("langusge",language)
         const languageConfig = getLanguageConfig(language);
         if (!languageConfig) {
           return res.status(400).json({ error: "Unsupported language" });
         }
         
         const roomId = `room-${Date.now()}-${randomUUID()}`;
-        const workspacePath = path.resolve("storage", roomId);
-        await fs.mkdir(workspacePath, { recursive: true });
-        
-        console.log("creating")
+
+        console.log("creating");
         const containerOptions: ContainerOptions = {
           image: languageConfig.image,
           roomId,
           exposedPort: languageConfig.port,
           envVars: languageConfig.envVars,
         };
-        console.log("creating")
-        const { containerId, hostPort } = await this.dockerManager.createContainer(containerOptions);
+        console.log("creating");
+        const { containerId, hostPort } =
+          await this.dockerManager.createContainer(containerOptions);
         if (!containerId || !hostPort) {
           return res.status(500).json({ error: "Failed to create container" });
         }
-        console.log(containerId,hostPort)
-        res.json({ message: "Room created successfully", roomId, containerId, hostPort, workspacePath });
+        console.log(containerId, hostPort, process.env.CLOUDFLARE_R2_BUCKET);
+
+        const tempDirPath = path.resolve("temp", roomId);
+        // Create a temporary directory to store files from R2
+        // await fs.mkdir(tempDirPath, { recursive: true });
+
+        // Download the files from the specified R2 bucket and folder
+        await streamR2FilesToContainer(   process.env.CLOUDFLARE_R2_BUCKET || "","base/reactjs",containerId,"/workspace");
+        // await copyFilesToContainer(containerId, tempDirPath, "/workspace"); // Change '/workspace' if needed
+        res.json({
+          message: "Room created successfully",
+          roomId,
+          containerId,
+          hostPort,
+          tempDirPath
+        });
       } catch (error) {
         console.error("Error creating room:", error);
         res.status(500).json({ error: "Failed to create room" });
@@ -92,11 +116,13 @@ export class HttpService {
     //@ts-ignore
     this.app.post("/read-file", async (req: Request, res: Response) => {
       try {
-        const { containerId, path: filePath ,roomId} = req.body;
+        const { containerId, path: filePath, roomId } = req.body;
         if (!filePath || !containerId) {
-          return res.status(400).json({ error: "Invalid file path or containerId" });
+          return res
+            .status(400)
+            .json({ error: "Invalid file path or containerId" });
         }
-        const output = await this.dockerManager.readFile(roomId,filePath)
+        const output = await this.dockerManager.readFile(roomId, filePath);
         res.json({ content: output });
       } catch (error) {
         console.error("Error reading file:", error);
@@ -109,20 +135,32 @@ export class HttpService {
     this.app.post("/save-file", async (req: Request, res: Response) => {
       try {
         const { containerId, path: filePath, content, roomId } = req.body;
-        if (!containerId || !filePath || typeof content !== "string" || !roomId) {
+        if (
+          !containerId ||
+          !filePath ||
+          typeof content !== "string" ||
+          !roomId
+        ) {
           return res.status(400).json({ error: "Invalid parameters" });
         }
-    
-        console.log(`Saving file: ${filePath} in container ${containerId} for room ${roomId}`);
-    
+
+        console.log(
+          `Saving file: ${filePath} in container ${containerId} for room ${roomId}`
+        );
+
         const dockerManager = new DockerManager(); // Should be injected or singleton in practice
         await dockerManager.writeFile(roomId, filePath, content);
-    
+
         console.log(`File ${filePath} saved successfully`);
         res.json({ success: true });
       } catch (error) {
         console.error("Failed to save file:", error);
-        res.status(500).json({ error: "Failed to save file", details: (error as Error).message });
+        res
+          .status(500)
+          .json({
+            error: "Failed to save file",
+            details: (error as Error).message,
+          });
       }
     });
 
@@ -149,13 +187,29 @@ export class HttpService {
 
 // Language Configurations
 function getLanguageConfig(language: string) {
-  const config: Record<string, { image: string; port: number; envVars?: string[] }> = {
+  const config: Record<
+    string,
+    { image: string; port: number; envVars?: string[] }
+  > = {
     node: { image: "node:18", port: 8080, envVars: ["NODE_ENV=development"] },
-    javascript: { image: "node:18", port: 8080, envVars: ["NODE_ENV=development"] },
-    python: { image: "python:3.10", port: 5000, envVars: ["FLASK_ENV=development"] },
+    javascript: {
+      image: "node:18",
+      port: 8080,
+      envVars: ["NODE_ENV=development"],
+    },
+    python: {
+      image: "python:3.10",
+      port: 5000,
+      envVars: ["FLASK_ENV=development"],
+    },
     java: { image: "openjdk:17", port: 8080, envVars: ["JAVA_OPTS=-Xmx512m"] },
     golang: { image: "golang:1.19", port: 8080, envVars: [] },
     rust: { image: "rust:latest", port: 8080, envVars: [] },
+    reactjs: {
+      image: "node:18", // we'll build this Docker image
+      port: 5173,
+      envVars: ["HOST=0.0.0.0", "PORT=5173"],
+    },
   };
   return config[language.toLowerCase()] || null;
 }

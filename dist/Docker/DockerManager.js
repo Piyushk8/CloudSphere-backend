@@ -97,40 +97,46 @@ http {
                 const ports = processes.map((p) => p.port);
                 const upstreams = ports
                     .map((port) => `
-upstream room_${roomId}_port_${port} {
-  server room-${roomId}:${port};
-}`)
+  upstream room_${roomId}_port_${port} {
+    server room-${roomId}:${port};
+  }`)
                     .join("\n");
                 const locations = ports
                     .map((port) => `
-location /room-${roomId}/${port}/ {
-  proxy_pass http://room_${roomId}_port_${port}/;
-  proxy_set_header Host $host;
-  proxy_set_header X-Real-IP $remote_addr;
-}`)
+        location /room-${roomId}/${port}/ {
+          proxy_pass http://room_${roomId}_port_${port};
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection "upgrade";
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+        }`)
                     .join("\n");
                 const defaultLocation = ports.length
                     ? `
-location /room-${roomId}/ {
-  proxy_pass http://room_${roomId}_port_${ports[0]}/;
-  proxy_set_header Host $host;
-  proxy_set_header X-Real-IP $remote_addr;
-}`
+        location /room-${roomId}/ {
+          proxy_pass http://room_${roomId}_port_${ports[0]};
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection "upgrade";
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+        }`
                     : "";
                 return { upstreams, locations, defaultLocation };
             })));
             const nginxConfigPath = path_1.default.resolve("nginx.conf");
             yield promises_1.default.writeFile(nginxConfigPath, `
-worker_processes 1;
-events { worker_connections 1024; }
-http {
-${configParts.map((p) => p.upstreams).join("\n")}
-  server {
-    listen 80;
-${configParts.map((p) => p.defaultLocation + p.locations).join("\n")}
-    location / { return 404 "No room or port specified"; }
-  }
-}`);
+  worker_processes 1;
+  events { worker_connections 1024; }
+  http {
+  ${configParts.map((p) => p.upstreams).join("\n")}
+    server {
+      listen 80;
+  ${configParts.map((p) => p.defaultLocation + p.locations).join("\n")}
+      location / { return 404 "No room or port specified"; }
+    }
+  }`);
             yield this.fileSystemService.execInContainer(this.nginxContainer.id, "nginx -s reload");
             console.log("✅ Nginx config reloaded");
         });
@@ -141,12 +147,14 @@ ${configParts.map((p) => p.defaultLocation + p.locations).join("\n")}
             const hostPort = yield this.getAvailablePort(4000, 5000);
             const workspacePath = path_1.default.resolve("storage", roomId);
             yield promises_1.default.mkdir(workspacePath, { recursive: true });
+            const subpath = `/room-${roomId}/5173/`;
+            const updatedEnvVars = [...envVars, `VITE_BASE_PATH=${subpath}`];
             const container = yield this.docker.createContainer({
                 Image: image,
                 name: `room-${roomId}`,
                 Tty: true,
                 OpenStdin: true,
-                Env: envVars,
+                Env: updatedEnvVars,
                 ExposedPorts: { [`${exposedPort}/tcp`]: {} },
                 WorkingDir: "/workspace",
                 HostConfig: {
@@ -212,12 +220,42 @@ ${configParts.map((p) => p.defaultLocation + p.locations).join("\n")}
             }
         });
     }
+    // async monitorPorts(roomId: string, containerId: string) {
+    //   console.log(
+    //     `🔍 Starting port monitoring for room: ${roomId}, container: ${containerId}`
+    //   );
+    //   const container = await this.getContainer(roomId);
+    //   if (!container || !container?.id)
+    //     throw new Error("no container found for monitoring");
+    //   const monitor = async () => {
+    //     try {
+    //       const activePorts = await this.getActivePorts(containerId);
+    //       if (activePorts.length > 0) {
+    //         for (let port of activePorts) {
+    //           this.checkHealth(containerId, parseInt(port));
+    //         }
+    //         webSocketServiceInstance.io
+    //           .to(roomId)
+    //           .emit("active-ports", { containerId, ports: activePorts });
+    //         this.updateNginxConfig();
+    //         console.log(`📤 Emitted active-ports for ${roomId}:`, activePorts);
+    //       } else {
+    //         console.log(`ℹ️ No active ports detected for ${roomId}`);
+    //       }
+    //     } catch (error) {
+    //       console.error(`❌ Error monitoring ports for ${roomId}:`, error);
+    //     }
+    //   };
+    //   await monitor();
+    //   const interval = setInterval(monitor, 5000);
+    //   container.wait(() => clearInterval(interval));
+    // }
     monitorPorts(roomId, containerId) {
         return __awaiter(this, void 0, void 0, function* () {
             console.log(`🔍 Starting port monitoring for room: ${roomId}, container: ${containerId}`);
             const container = yield this.getContainer(roomId);
             if (!container || !(container === null || container === void 0 ? void 0 : container.id))
-                throw new Error("no container found for monitoring");
+                throw new Error("No container found for monitoring");
             const monitor = () => __awaiter(this, void 0, void 0, function* () {
                 try {
                     const activePorts = yield this.getActivePorts(containerId);
@@ -225,9 +263,23 @@ ${configParts.map((p) => p.defaultLocation + p.locations).join("\n")}
                         for (let port of activePorts) {
                             this.checkHealth(containerId, parseInt(port));
                         }
+                        // Emit active ports to WebSocket
                         __1.webSocketServiceInstance.io
                             .to(roomId)
                             .emit("active-ports", { containerId, ports: activePorts });
+                        // Dynamically determine the basePath
+                        const basePath = `/room-${roomId}/${activePorts[0]}/`; // Using first port for simplicity
+                        // Write basePath to shared env config file inside the container
+                        yield container.exec({
+                            Cmd: [
+                                'sh',
+                                '-c',
+                                `echo '{ "VITE_BASE_PATH": "${basePath}" }' > /etc/cloudide/env.json`
+                            ],
+                            AttachStdout: true,
+                            AttachStderr: true
+                        });
+                        // Optionally update Nginx config (if needed)
                         this.updateNginxConfig();
                         console.log(`📤 Emitted active-ports for ${roomId}:`, activePorts);
                     }

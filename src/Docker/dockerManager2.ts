@@ -17,15 +17,13 @@
 // }
 
 // export class DockerManager {
-//   private docker: Docker;
+//   public docker: Docker;
 //   private activeContainers: Record<string, string>;
 //   private roomFileTrees: Map<string, FileNode[]>;
 //   private networkName = "cloud_ide_network";
 //   private nginxContainer: Docker.Container | null = null;
-//   private fileSystemService: FileSystemService;
+//   public fileSystemService: FileSystemService;
 //   // private wsservice:WebSocketService;
-  
-
 
 //   constructor() {
 //     this.docker = new Docker();
@@ -41,12 +39,17 @@
 //   private async initializeNginxProxy(): Promise<void> {
 //     const networks = await this.docker.listNetworks();
 //     if (!networks.some((n) => n.Name === this.networkName)) {
-//       await this.docker.createNetwork({ Name: this.networkName, Driver: "bridge" });
+//       await this.docker.createNetwork({
+//         Name: this.networkName,
+//         Driver: "bridge",
+//       });
 //       console.log(`✅ Created network '${this.networkName}'`);
 //     }
 
 //     const containers = await this.docker.listContainers({ all: true });
-//     const nginxContainer = containers.find((c) => c.Names.includes("/nginx_proxy"));
+//     const nginxContainer = containers.find((c) =>
+//       c.Names.includes("/nginx_proxy")
+//     );
 
 //     if (!nginxContainer) {
 //       await this.startNginxContainer();
@@ -94,67 +97,73 @@
 
 //   private async updateNginxConfig(): Promise<void> {
 //     if (!this.nginxContainer) return;
-
+  
 //     const containers = await this.docker.listContainers({ all: true });
 //     const roomContainers = containers.filter((c) =>
 //       c.Names.some((n) => n.startsWith("/room-"))
 //     );
-
+  
 //     const configParts = await Promise.all(
 //       roomContainers.map(async (c) => {
 //         const roomId = c.Names[0].replace(/^\/room-/, "");
 //         const { processes } = await this.getContainerProcesses(roomId);
 //         const ports = processes.map((p) => p.port);
-
+  
 //         const upstreams = ports
 //           .map(
 //             (port) => `
-// upstream room_${roomId}_port_${port} {
-//   server room-${roomId}:${port};
-// }`
+//   upstream room_${roomId}_port_${port} {
+//     server room-${roomId}:${port};
+//   }`
 //           )
 //           .join("\n");
-
+  
 //         const locations = ports
 //           .map(
 //             (port) => `
-// location /room-${roomId}/${port}/ {
-//   proxy_pass http://room_${roomId}_port_${port}/;
-//   proxy_set_header Host $host;
-//   proxy_set_header X-Real-IP $remote_addr;
-// }`
+//         location /room-${roomId}/${port}/ {
+//           proxy_pass http://room_${roomId}_port_${port};
+//           proxy_http_version 1.1;
+//           proxy_set_header Upgrade $http_upgrade;
+//           proxy_set_header Connection "upgrade";
+//           proxy_set_header Host $host;
+//           proxy_set_header X-Real-IP $remote_addr;
+//         }`
 //           )
 //           .join("\n");
-
+  
 //         const defaultLocation = ports.length
 //           ? `
-// location /room-${roomId}/ {
-//   proxy_pass http://room_${roomId}_port_${ports[0]}/;
-//   proxy_set_header Host $host;
-//   proxy_set_header X-Real-IP $remote_addr;
-// }`
+//         location /room-${roomId}/ {
+//           proxy_pass http://room_${roomId}_port_${ports[0]};
+//           proxy_http_version 1.1;
+//           proxy_set_header Upgrade $http_upgrade;
+//           proxy_set_header Connection "upgrade";
+//           proxy_set_header Host $host;
+//           proxy_set_header X-Real-IP $remote_addr;
+//         }`
 //           : "";
-
+  
 //         return { upstreams, locations, defaultLocation };
 //       })
 //     );
-
+  
 //     const nginxConfigPath = path.resolve("nginx.conf");
 //     await fs.writeFile(
 //       nginxConfigPath,
 //       `
-// worker_processes 1;
-// events { worker_connections 1024; }
-// http {
-// ${configParts.map((p) => p.upstreams).join("\n")}
-//   server {
-//     listen 80;
-// ${configParts.map((p) => p.defaultLocation + p.locations).join("\n")}
-//     location / { return 404 "No room or port specified"; }
-//   }
-// }`
+//   worker_processes 1;
+//   events { worker_connections 1024; }
+//   http {
+//   ${configParts.map((p) => p.upstreams).join("\n")}
+//     server {
+//       listen 80;
+//   ${configParts.map((p) => p.defaultLocation + p.locations).join("\n")}
+//       location / { return 404 "No room or port specified"; }
+//     }
+//   }`
 //     );
-
+  
 //     await this.fileSystemService.execInContainer(
 //       this.nginxContainer.id,
 //       "nginx -s reload"
@@ -162,37 +171,46 @@
 //     console.log("✅ Nginx config reloaded");
 //   }
 
-//   async createContainer(options: ContainerOptions): Promise<{ containerId: string; hostPort: number }> {
+//   async createContainer(
+//     options: ContainerOptions
+//   ): Promise<{ containerId: string; hostPort: number }> {
 //     const { image, roomId, exposedPort = 8080, envVars = [] } = options;
 //     const hostPort = await this.getAvailablePort(4000, 5000);
 //     const workspacePath = path.resolve("storage", roomId);
-
+    
 //     await fs.mkdir(workspacePath, { recursive: true });
-
+    
+//     const subpath = `/room-${roomId}/5173/`;
+//     const updatedEnvVars = [...envVars, `VITE_BASE_PATH=${subpath}`];
+  
 //     const container = await this.docker.createContainer({
 //       Image: image,
 //       name: `room-${roomId}`,
 //       Tty: true,
 //       OpenStdin: true,
-//       Env: envVars,
+//       Env: updatedEnvVars,
 //       ExposedPorts: { [`${exposedPort}/tcp`]: {} },
+//       WorkingDir: "/workspace",
 //       HostConfig: {
-//         PortBindings: { [`${exposedPort}/tcp`]: [{ HostPort: String(hostPort) }] },
-//         Binds: [`${workspacePath}:/workspace`],
+//         PortBindings: {
+//           [`${exposedPort}/tcp`]: [{ HostPort: String(hostPort) }],
+//         },
 //         NetworkMode: this.networkName,
 //         AutoRemove: true,
 //       },
 //     });
-
+  
 //     await container.start();
-//     this.activeContainers[roomId] = container.id;
-
+  
 //     await this.fileSystemService.execInContainer(
 //       container.id,
 //       "apt update && apt install -y lsof grep tree socat"
 //     );
-//     await this.updateNginxConfig();
-
+//     try {
+//       await this.updateNginxConfig();
+//     } catch (err) {
+//       console.error("❌ Error updating NGINX:", err);
+//     }
 //     return { containerId: container.id, hostPort };
 //   }
 
@@ -234,18 +252,90 @@
 
 //     return { containerIP, processes };
 //   }
+//   async checkHealth(containerId: string, port: number): Promise<boolean> {
+//     try {
+//       const output = await this.fileSystemService.execInContainer(
+//         containerId,
+//         `curl -s -o /dev/null -w "%{http_code}" http://localhost:${port}/health`
+//       );
+//       console.log("helath", output);
+//       return output.trim() === "200";
+//     } catch (e) {
+//       return false;
+//     }
+//   }
 
+//   // async monitorPorts(roomId: string, containerId: string) {
+//   //   console.log(
+//   //     `🔍 Starting port monitoring for room: ${roomId}, container: ${containerId}`
+//   //   );
+//   //   const container = await this.getContainer(roomId);
+//   //   if (!container || !container?.id)
+//   //     throw new Error("no container found for monitoring");
+
+//   //   const monitor = async () => {
+//   //     try {
+//   //       const activePorts = await this.getActivePorts(containerId);
+//   //       if (activePorts.length > 0) {
+//   //         for (let port of activePorts) {
+//   //           this.checkHealth(containerId, parseInt(port));
+//   //         }
+//   //         webSocketServiceInstance.io
+//   //           .to(roomId)
+//   //           .emit("active-ports", { containerId, ports: activePorts });
+//   //         this.updateNginxConfig();
+//   //         console.log(`📤 Emitted active-ports for ${roomId}:`, activePorts);
+//   //       } else {
+//   //         console.log(`ℹ️ No active ports detected for ${roomId}`);
+//   //       }
+//   //     } catch (error) {
+//   //       console.error(`❌ Error monitoring ports for ${roomId}:`, error);
+//   //     }
+//   //   };
+
+//   //   await monitor();
+//   //   const interval = setInterval(monitor, 5000);
+//   //   container.wait(() => clearInterval(interval));
+//   // }
 //   async monitorPorts(roomId: string, containerId: string) {
-//     console.log(`🔍 Starting port monitoring for room: ${roomId}, container: ${containerId}`);
+//     console.log(
+//       `🔍 Starting port monitoring for room: ${roomId}, container: ${containerId}`
+//     );
+  
 //     const container = await this.getContainer(roomId);
-//     if (!container || !container?.id) throw new Error("no container found for monitoring");
+//     if (!container || !container?.id)
+//       throw new Error("No container found for monitoring");
   
 //     const monitor = async () => {
 //       try {
 //         const activePorts = await this.getActivePorts(containerId);
+  
 //         if (activePorts.length > 0) {
-//           webSocketServiceInstance.io.to(roomId).emit("active-ports", { containerId, ports: activePorts });
-//           this.updateNginxConfig()
+//           for (let port of activePorts) {
+//             this.checkHealth(containerId, parseInt(port));
+//           }
+  
+//           // Emit active ports to WebSocket
+//           webSocketServiceInstance.io
+//             .to(roomId)
+//             .emit("active-ports", { containerId, ports: activePorts });
+  
+//           // Dynamically determine the basePath
+//           const basePath = `/room-${roomId}/${activePorts[0]}/`; // Using first port for simplicity
+//           // Write basePath to shared env config file inside the container
+//           await container.exec({
+//             Cmd: [
+//               'sh',
+//               '-c',
+//               `echo '{ "VITE_BASE_PATH": "${basePath}" }' > /etc/cloudide/env.json`
+//             ],
+//             AttachStdout: true,
+//             AttachStderr: true
+//           });
+  
+//           // Optionally update Nginx config (if needed)
+//           this.updateNginxConfig();
+  
 //           console.log(`📤 Emitted active-ports for ${roomId}:`, activePorts);
 //         } else {
 //           console.log(`ℹ️ No active ports detected for ${roomId}`);
@@ -259,6 +349,7 @@
 //     const interval = setInterval(monitor, 5000);
 //     container.wait(() => clearInterval(interval));
 //   }
+  
 
 //   async getContainerIP(roomId: string): Promise<string> {
 //     const container = await this.getContainer(roomId);
@@ -312,8 +403,8 @@
 //   }
 
 //   async readFile(roomId: string, filename: string): Promise<string> {
-//     const container = await this.getContainer(roomId)
-//     if(!container || !container?.id) throw new Error("not found container")
+//     const container = await this.getContainer(roomId);
+//     if (!container || !container?.id) throw new Error("not found container");
 
 //     return this.fileSystemService.execInContainer(
 //       container?.id,
@@ -321,10 +412,13 @@
 //     );
 //   }
 
-//   async writeFile(roomId: string, filename: string, content: string): Promise<void> {
-//     const container = await this.getContainer(roomId)
-//     if(!container || !container?.id) throw new Error("not found container")
-
+//   async writeFile(
+//     roomId: string,
+//     filename: string,
+//     content: string
+//   ): Promise<void> {
+//     const container = await this.getContainer(roomId);
+//     if (!container || !container?.id) throw new Error("not found container");
 //     const escaped = content.replace(/'/g, "'\\''");
 //     await this.fileSystemService.execInContainer(
 //       // this.activeContainers[roomId],/
@@ -352,7 +446,8 @@
 //     const container = await this.getContainer(roomId);
 //     if (!container) return false;
 
-//     const currentTree = this.roomFileTrees.get(roomId) || (await this.getFileTree(roomId));
+//     const currentTree =
+//       this.roomFileTrees.get(roomId) || (await this.getFileTree(roomId));
 //     const { toCreate, toDelete } = diffTrees(currentTree, newTree);
 
 //     await this.applyChangesToContainer(container.id, toCreate, toDelete);
@@ -366,7 +461,10 @@
 //     toDelete: string[]
 //   ): Promise<void> {
 //     for (const path of toDelete) {
-//       await this.fileSystemService.execInContainer(containerId, `rm -rf ${path}`);
+//       await this.fileSystemService.execInContainer(
+//         containerId,
+//         `rm -rf ${path}`
+//       );
 //     }
 //     for (const path of toCreate) {
 //       const isFolder = path.endsWith("/");
@@ -378,7 +476,10 @@
 //   }
 // }
 
-// function diffTrees(currentTree: FileNode[], newTree: FileNode[]): { toCreate: string[]; toDelete: string[] } {
+// function diffTrees(
+//   currentTree: FileNode[],
+//   newTree: FileNode[]
+// ): { toCreate: string[]; toDelete: string[] } {
 //   const currentPaths = new Set(flattenTree(currentTree));
 //   const newPaths = new Set(flattenTree(newTree));
 //   return {
@@ -394,5 +495,3 @@
 //     return acc;
 //   }, []);
 // }
-
-//! original code 

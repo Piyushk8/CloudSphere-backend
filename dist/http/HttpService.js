@@ -19,10 +19,12 @@ const cors_1 = __importDefault(require("cors"));
 const DockerManager_1 = require("../Docker/DockerManager");
 const WebsocketService_1 = require("../Websocket/WebsocketService");
 const crypto_1 = require("crypto");
-const promises_1 = __importDefault(require("fs/promises"));
 const path_1 = __importDefault(require("path"));
 const child_process_1 = require("child_process");
 const util_1 = require("util");
+const dotenv_1 = __importDefault(require("dotenv"));
+dotenv_1.default.config(); // This will load variables from .env
+const AWS_1 = require("../AWS");
 const execPromise = (0, util_1.promisify)(child_process_1.exec);
 class HttpService {
     constructor() {
@@ -31,7 +33,11 @@ class HttpService {
         this.websocketService = new WebsocketService_1.WebSocketService(this.server);
         this.dockerManager = new DockerManager_1.DockerManager();
         this.app.use(express_1.default.json());
-        this.app.use((0, cors_1.default)({ origin: "http://localhost:5173", methods: ["GET", "POST"], credentials: true }));
+        this.app.use((0, cors_1.default)({
+            origin: "http://localhost:5173",
+            methods: ["GET", "POST"],
+            credentials: true,
+        }));
         // Test API
         this.app.get("/", (req, res) => {
             res.json({ message: "Hello, Cloud IDE is running!" });
@@ -60,15 +66,16 @@ class HttpService {
             try {
                 const { language } = req.body;
                 if (!language) {
-                    return res.status(400).json({ error: "Language selection is required" });
+                    return res
+                        .status(400)
+                        .json({ error: "Language selection is required" });
                 }
+                console.log("langusge", language);
                 const languageConfig = getLanguageConfig(language);
                 if (!languageConfig) {
                     return res.status(400).json({ error: "Unsupported language" });
                 }
                 const roomId = `room-${Date.now()}-${(0, crypto_1.randomUUID)()}`;
-                const workspacePath = path_1.default.resolve("storage", roomId);
-                yield promises_1.default.mkdir(workspacePath, { recursive: true });
                 console.log("creating");
                 const containerOptions = {
                     image: languageConfig.image,
@@ -81,8 +88,20 @@ class HttpService {
                 if (!containerId || !hostPort) {
                     return res.status(500).json({ error: "Failed to create container" });
                 }
-                console.log(containerId, hostPort);
-                res.json({ message: "Room created successfully", roomId, containerId, hostPort, workspacePath });
+                console.log(containerId, hostPort, process.env.CLOUDFLARE_R2_BUCKET);
+                const tempDirPath = path_1.default.resolve("temp", roomId);
+                // Create a temporary directory to store files from R2
+                // await fs.mkdir(tempDirPath, { recursive: true });
+                // Download the files from the specified R2 bucket and folder
+                yield (0, AWS_1.streamR2FilesToContainer)(process.env.CLOUDFLARE_R2_BUCKET || "", "base/reactjs", containerId, "/workspace");
+                // await copyFilesToContainer(containerId, tempDirPath, "/workspace"); // Change '/workspace' if needed
+                res.json({
+                    message: "Room created successfully",
+                    roomId,
+                    containerId,
+                    hostPort,
+                    tempDirPath
+                });
             }
             catch (error) {
                 console.error("Error creating room:", error);
@@ -95,7 +114,9 @@ class HttpService {
             try {
                 const { containerId, path: filePath, roomId } = req.body;
                 if (!filePath || !containerId) {
-                    return res.status(400).json({ error: "Invalid file path or containerId" });
+                    return res
+                        .status(400)
+                        .json({ error: "Invalid file path or containerId" });
                 }
                 const output = yield this.dockerManager.readFile(roomId, filePath);
                 res.json({ content: output });
@@ -110,7 +131,10 @@ class HttpService {
         this.app.post("/save-file", (req, res) => __awaiter(this, void 0, void 0, function* () {
             try {
                 const { containerId, path: filePath, content, roomId } = req.body;
-                if (!containerId || !filePath || typeof content !== "string" || !roomId) {
+                if (!containerId ||
+                    !filePath ||
+                    typeof content !== "string" ||
+                    !roomId) {
                     return res.status(400).json({ error: "Invalid parameters" });
                 }
                 console.log(`Saving file: ${filePath} in container ${containerId} for room ${roomId}`);
@@ -121,7 +145,12 @@ class HttpService {
             }
             catch (error) {
                 console.error("Failed to save file:", error);
-                res.status(500).json({ error: "Failed to save file", details: error.message });
+                res
+                    .status(500)
+                    .json({
+                    error: "Failed to save file",
+                    details: error.message,
+                });
             }
         }));
         // Proxy Route (Simplified, assuming completion elsewhere)
@@ -150,11 +179,24 @@ exports.HttpService = HttpService;
 function getLanguageConfig(language) {
     const config = {
         node: { image: "node:18", port: 8080, envVars: ["NODE_ENV=development"] },
-        javascript: { image: "node:18", port: 8080, envVars: ["NODE_ENV=development"] },
-        python: { image: "python:3.10", port: 5000, envVars: ["FLASK_ENV=development"] },
+        javascript: {
+            image: "node:18",
+            port: 8080,
+            envVars: ["NODE_ENV=development"],
+        },
+        python: {
+            image: "python:3.10",
+            port: 5000,
+            envVars: ["FLASK_ENV=development"],
+        },
         java: { image: "openjdk:17", port: 8080, envVars: ["JAVA_OPTS=-Xmx512m"] },
         golang: { image: "golang:1.19", port: 8080, envVars: [] },
         rust: { image: "rust:latest", port: 8080, envVars: [] },
+        reactjs: {
+            image: "node:18", // we'll build this Docker image
+            port: 5173,
+            envVars: ["HOST=0.0.0.0", "PORT=5173"],
+        },
     };
     return config[language.toLowerCase()] || null;
 }

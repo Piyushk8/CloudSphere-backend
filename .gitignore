@@ -4,3 +4,4 @@ nginx.conf
 node_modules/
 dist/
 storage/
+test.ts
