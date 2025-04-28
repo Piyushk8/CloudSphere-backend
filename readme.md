@@ -5,6 +5,15 @@ A **cloud-based collaborative IDE** that supports real-time terminal access, fil
 
 ---
 
+# Demo video:
+Landing Page UI:
+![Screenshot 2025-04-28 034210](https://github.com/user-attachments/assets/ce04eed3-fa74-42be-a119-dccd281f8196)
+
+Room UI:
+
+https://github.com/user-attachments/assets/1623032d-eb83-4148-9908-7762d6df4b2e
+
+
 ## 📁 Project Structure
 
 ```
