@@ -1,8 +1,10 @@
-import Docker from 'dockerode';
-import path from 'path';
-import fs from 'fs/promises';
-import { FileSystemService, FileNode } from './fileSystemService';
-import { webSocketServiceInstance } from '..';
+import Docker from "dockerode";
+import path from "path";
+import fs from "fs/promises";
+import { FileSystemService, FileNode } from "./fileSystemService";
+import { webSocketServiceInstance } from "..";
+import dotenv from "dotenv";
+dotenv.config();
 
 export interface ContainerOptions {
   image: string;
@@ -15,8 +17,7 @@ export class DockerManager {
   public docker: Docker;
   private activeContainers: Record<string, string>;
   private roomFileTrees: Map<string, FileNode[]>;
-  private networkName = 'cloud_ide_network';
-  private nginxContainer: Docker.Container | null = null;
+  private networkName = process.env.NETWORK_NAME || "";
   public fileSystemService: FileSystemService;
 
   constructor() {
@@ -24,174 +25,64 @@ export class DockerManager {
     this.activeContainers = {};
     this.roomFileTrees = new Map();
     this.fileSystemService = new FileSystemService(this.docker);
-    this.initializeNginxProxy().catch((err) => console.error('Nginx init failed:', err));
   }
 
-  private async initializeNginxProxy(): Promise<void> {
-    const networks = await this.docker.listNetworks();
-    if (!networks.some((n) => n.Name === this.networkName)) {
-      await this.docker.createNetwork({ Name: this.networkName, Driver: 'bridge' });
-      console.log(`✅ Created network '${this.networkName}'`);
-    }
-
-    const containers = await this.docker.listContainers({ all: true });
-    const nginxContainer = containers.find((c) => c.Names.includes('/nginx_proxy'));
-
-    if (!nginxContainer) {
-      await this.startNginxContainer();
-    } else {
-      this.nginxContainer = this.docker.getContainer(nginxContainer.Id);
-      const info = await this.nginxContainer.inspect();
-      if (!info.State.Running) {
-        await this.nginxContainer.start();
-        console.log('✅ Restarted Nginx proxy');
-      }
-    }
-
-    await this.updateNginxConfig();
-  }
-
-  private async startNginxContainer(): Promise<void> {
-    const nginxConfigPath = path.resolve('nginx.conf');
-    await fs.writeFile(
-      nginxConfigPath,
-      `
-worker_processes 1;
-events { worker_connections 1024; }
-http {
-  server {
-    listen 80;
-    location / { return 200 "Nginx proxy running"; }
-  }
-}`
-    );
-
-    this.nginxContainer = await this.docker.createContainer({
-      Image: 'nginx:latest',
-      name: 'nginx_proxy',
-      ExposedPorts: { '80/tcp': {} },
-      HostConfig: {
-        PortBindings: { '80/tcp': [{ HostPort: '8080' }] },
-        Binds: [`${nginxConfigPath}:/etc/nginx/nginx.conf:ro`],
-        NetworkMode: this.networkName,
-      },
-    });
-
-    await this.nginxContainer.start();
-    console.log('✅ Nginx proxy started on port 8080');
-  }
-
-  private async updateNginxConfig(): Promise<void> {
-    if (!this.nginxContainer) return;
-
-    const containers = await this.docker.listContainers({ all: true });
-    const roomContainers = containers.filter((c) => c.Names.some((n) => n.startsWith('/room-')));
-
-    const configParts = await Promise.all(
-      roomContainers.map(async (c) => {
-        const roomId = c.Names[0].replace(/^\/room-/, '');
-        const { processes } = await this.getContainerProcesses(roomId);
-        const ports = processes.map((p) => p.port);
-
-        const upstreams = ports
-          .map((port) => `
-  upstream room_${roomId}_port_${port} {
-    server room-${roomId}:${port};
-  }`)
-          .join('\n');
-
-        const locations = ports
-          .map((port) => `
-        location /room-${roomId}/${port}/ {
-          proxy_pass http://room_${roomId}_port_${port};
-          proxy_http_version 1.1;
-          proxy_set_header Upgrade $http_upgrade;
-          proxy_set_header Connection "upgrade";
-          proxy_set_header Host $host;
-          proxy_set_header X-Real-IP $remote_addr;
-        }`)
-          .join('\n');
-
-        const defaultLocation = ports.length
-          ? `
-        location /room-${roomId}/ {
-          proxy_pass http://room_${roomId}_port_${ports[0]};
-          proxy_http_version 1.1;
-          proxy_set_header Upgrade $http_upgrade;
-          proxy_set_header Connection "upgrade";
-          proxy_set_header Host $host;
-          proxy_set_header X-Real-IP $remote_addr;
-        }`
-          : '';
-
-        return { upstreams, locations, defaultLocation };
-      })
-    );
-
-    const nginxConfigPath = path.resolve('nginx.conf');
-    await fs.writeFile(
-      nginxConfigPath,
-      `
-  worker_processes 1;
-  events { worker_connections 1024; }
-  http {
-  ${configParts.map((p) => p.upstreams).join('\n')}
-    server {
-      listen 80;
-  ${configParts.map((p) => p.defaultLocation + p.locations).join('\n')}
-      location / { return 404 "No room or port specified"; }
-    }
-  }`
-    );
-
-    await this.fileSystemService.execInContainer(this.nginxContainer.id, 'nginx -s reload');
-    console.log('✅ Nginx config reloaded');
-  }
-
-  async createContainer(options: ContainerOptions): Promise<{ containerId: string; hostPort: number }> {
+  
+  async createContainer(
+    options: ContainerOptions
+  ): Promise<{ containerId: string }> {
     const { image, roomId, exposedPort = 8080, envVars = [] } = options;
-    const hostPort = await this.getAvailablePort(4000, 5000);
-    const workspacePath = path.resolve('storage', roomId);
 
-    // await fs.mkdir(workspacePath, { recursive: true });
-
-    const subpath = `/room-${roomId}/5173/`;
-    const updatedEnvVars = [...envVars, `VITE_BASE_PATH=${subpath}`];
+    const containerName = `room-${roomId}`;
+    const host = `${containerName}.localhost`;
 
     const container = await this.docker.createContainer({
       Image: image,
-      name: `room-${roomId}`,
+      name: containerName,
       Tty: true,
       OpenStdin: true,
-      Env: updatedEnvVars,
+      Env: envVars,
       ExposedPorts: { [`${exposedPort}/tcp`]: {} },
-      WorkingDir: '/workspace',
+      WorkingDir: "/workspace",
       HostConfig: {
-        PortBindings: { [`${exposedPort}/tcp`]: [{ HostPort: String(hostPort) }] },
-        NetworkMode: this.networkName,
-        AutoRemove: true,
+        Memory: 1024 * 1024 * 1024,
+        CpuQuota: 100000,
+        CpuPeriod: 100000,
+      },
+      NetworkingConfig: {
+        EndpointsConfig: {
+          [this.networkName]: {}, // this.networkName = "traefik-network"
+        },
+      },
+      Labels: {
+        "traefik.enable": "true",
+        "traefik.docker.network": this.networkName,
+
+        [`traefik.http.routers.${containerName}.rule`]: `Host(\`${host}\`)`,
+        [`traefik.http.routers.${containerName}.entrypoints`]: "web",
+        [`traefik.http.services.${containerName}.loadbalancer.server.port`]: `${exposedPort}`,
       },
     });
 
     await container.start();
     this.activeContainers[roomId] = container.id;
-
     await this.fileSystemService.execInContainer(
       container.id,
-      'apt update && apt install -y lsof grep tree socat'
+      "apt update && apt install -y lsof grep tree socat"
     );
-    await this.updateNginxConfig();
+
     this.monitorPorts(roomId, container.id);
-    return { containerId: container.id, hostPort };
+
+    return { containerId: container.id };
   }
 
   async getActivePorts(containerId: string): Promise<string[]> {
     const { output } = await this.fileSystemService.execInContainer(
       containerId,
-      'lsof -i -P -n | grep LISTEN'
+      "lsof -i -P -n | grep LISTEN"
     );
     return output
-      .split('\n')
+      .split("\n")
       .map((line) => line.match(/:(\d+)\s+\(LISTEN\)/)?.[1])
       .filter((port): port is string => !!port);
   }
@@ -206,11 +97,11 @@ http {
     const containerIP = await this.getContainerIP(roomId);
     const { output } = await this.fileSystemService.execInContainer(
       container.id,
-      'lsof -i -P -n | grep LISTEN'
+      "lsof -i -P -n | grep LISTEN"
     );
 
     const processes = output
-      .split('\n')
+      .split("\n")
       .map((line) => {
         const parts = line.split(/\s+/);
         if (parts.length < 9) return null;
@@ -230,16 +121,18 @@ http {
         containerId,
         `curl -s -o /dev/null -w "%{http_code}" http://localhost:${port}/health`
       );
-      return output.trim() === '200';
+      return output.trim() === "200";
     } catch {
       return false;
     }
   }
 
   async monitorPorts(roomId: string, containerId: string) {
-    console.log(`🔍 Starting port monitoring for room: ${roomId}, container: ${containerId}`);
+    console.log(
+      `🔍 Starting port monitoring for room: ${roomId}, container: ${containerId}`
+    );
     const container = await this.getContainer(roomId);
-    if (!container) throw new Error('No container found for monitoring');
+    if (!container) throw new Error("No container found for monitoring");
 
     const monitor = async () => {
       try {
@@ -248,8 +141,10 @@ http {
           for (const port of activePorts) {
             await this.checkHealth(containerId, parseInt(port));
           }
-          webSocketServiceInstance.io.to(roomId).emit('active-ports', { containerId, ports: activePorts });
-          await this.updateNginxConfig();
+          webSocketServiceInstance.io
+            .to(roomId)
+            .emit("active-ports", { containerId, ports: activePorts });
+          //! await this.updateNginxConfig();
           console.log(`📤 Emitted active-ports for ${roomId}:`, activePorts);
         }
       } catch (error) {
@@ -266,12 +161,14 @@ http {
     const container = await this.getContainer(roomId);
     if (!container) throw new Error(`No container for room '${roomId}'`);
     const inspect = await container.inspect();
-    return inspect.NetworkSettings.Networks[this.networkName]?.IPAddress || '';
+    return inspect.NetworkSettings.Networks[this.networkName]?.IPAddress || "";
   }
 
   async getContainer(roomId: string): Promise<Docker.Container | null> {
     const containers = await this.docker.listContainers({ all: true });
-    const containerInfo = containers.find((c) => c.Names.includes(`/room-${roomId}`));
+    const containerInfo = containers.find((c) =>
+      c.Names.includes(`/room-${roomId}`)
+    );
     return containerInfo ? this.docker.getContainer(containerInfo.Id) : null;
   }
 
@@ -286,13 +183,13 @@ http {
   }
 
   private async getAvailablePort(start: number, end: number): Promise<number> {
-    const net = require('net');
+    const net = require("net");
     for (let port = start; port <= end; port++) {
       const server = net.createServer();
       try {
         await new Promise<void>((resolve, reject) => {
-          server.once('error', reject);
-          server.once('listening', () => server.close(resolve));
+          server.once("error", reject);
+          server.once("listening", () => server.close(resolve));
           server.listen(port);
         });
         return port;
@@ -300,16 +197,24 @@ http {
         continue;
       }
     }
-    throw new Error('No available ports');
+    throw new Error("No available ports");
   }
 
   async createFile(roomId: string, filePath: string): Promise<void> {
     const container = await this.getContainer(roomId);
     if (!container) throw new Error(`No container for room '${roomId}'`);
     const escapedPath = this.fileSystemService.escapePath(filePath);
-    const { exitCode: existsExitCode } = await this.fileSystemService.execInContainer(container.id, `[ -e ${escapedPath} ]`);
-    if (existsExitCode === 0) throw new Error(`File already exists: ${filePath}`);
-    const { exitCode } = await this.fileSystemService.execInContainer(container.id, `touch ${escapedPath}`);
+    const { exitCode: existsExitCode } =
+      await this.fileSystemService.execInContainer(
+        container.id,
+        `[ -e ${escapedPath} ]`
+      );
+    if (existsExitCode === 0)
+      throw new Error(`File already exists: ${filePath}`);
+    const { exitCode } = await this.fileSystemService.execInContainer(
+      container.id,
+      `touch ${escapedPath}`
+    );
     if (exitCode !== 0) throw new Error(`Failed to create file: ${filePath}`);
   }
 
@@ -317,33 +222,65 @@ http {
     const container = await this.getContainer(roomId);
     if (!container) throw new Error(`No container for room '${roomId}'`);
     const escapedPath = this.fileSystemService.escapePath(folderPath);
-    const { exitCode: existsExitCode } = await this.fileSystemService.execInContainer(container.id, `[ -e ${escapedPath} ]`);
-    if (existsExitCode === 0) throw new Error(`Folder already exists: ${folderPath}`);
-    const { exitCode } = await this.fileSystemService.execInContainer(container.id, `mkdir ${escapedPath}`);
-    if (exitCode !== 0) throw new Error(`Failed to create folder: ${folderPath}`);
+    const { exitCode: existsExitCode } =
+      await this.fileSystemService.execInContainer(
+        container.id,
+        `[ -e ${escapedPath} ]`
+      );
+    if (existsExitCode === 0)
+      throw new Error(`Folder already exists: ${folderPath}`);
+    const { exitCode } = await this.fileSystemService.execInContainer(
+      container.id,
+      `mkdir ${escapedPath}`
+    );
+    if (exitCode !== 0)
+      throw new Error(`Failed to create folder: ${folderPath}`);
   }
 
   async deletePath(roomId: string, path: string): Promise<void> {
     const container = await this.getContainer(roomId);
     if (!container) throw new Error(`No container for room '${roomId}'`);
     const escapedPath = this.fileSystemService.escapePath(path);
-    const { exitCode: existsExitCode } = await this.fileSystemService.execInContainer(container.id, `[ -e ${escapedPath} ]`);
+    const { exitCode: existsExitCode } =
+      await this.fileSystemService.execInContainer(
+        container.id,
+        `[ -e ${escapedPath} ]`
+      );
     if (existsExitCode !== 0) throw new Error(`Path does not exist: ${path}`);
-    const { exitCode } = await this.fileSystemService.execInContainer(container.id, `rm -rf ${escapedPath}`);
+    const { exitCode } = await this.fileSystemService.execInContainer(
+      container.id,
+      `rm -rf ${escapedPath}`
+    );
     if (exitCode !== 0) throw new Error(`Failed to delete path: ${path}`);
   }
 
-  async renamePath(roomId: string, oldPath: string, newPath: string): Promise<void> {
+  async renamePath(
+    roomId: string,
+    oldPath: string,
+    newPath: string
+  ): Promise<void> {
     const container = await this.getContainer(roomId);
     if (!container) throw new Error(`No container for room '${roomId}'`);
     const escapedOldPath = this.fileSystemService.escapePath(oldPath);
     const escapedNewPath = this.fileSystemService.escapePath(newPath);
-    const { exitCode: oldExists } = await this.fileSystemService.execInContainer(container.id, `[ -e ${escapedOldPath} ]`);
+    const { exitCode: oldExists } =
+      await this.fileSystemService.execInContainer(
+        container.id,
+        `[ -e ${escapedOldPath} ]`
+      );
     if (oldExists !== 0) throw new Error(`Old path does not exist: ${oldPath}`);
-    const { exitCode: newExists } = await this.fileSystemService.execInContainer(container.id, `[ -e ${escapedNewPath} ]`);
+    const { exitCode: newExists } =
+      await this.fileSystemService.execInContainer(
+        container.id,
+        `[ -e ${escapedNewPath} ]`
+      );
     if (newExists === 0) throw new Error(`New path already exists: ${newPath}`);
-    const { exitCode } = await this.fileSystemService.execInContainer(container.id, `mv ${escapedOldPath} ${escapedNewPath}`);
-    if (exitCode !== 0) throw new Error(`Failed to rename path: ${oldPath} to ${newPath}`);
+    const { exitCode } = await this.fileSystemService.execInContainer(
+      container.id,
+      `агатоmv ${escapedOldPath} ${escapedNewPath}`
+    );
+    if (exitCode !== 0)
+      throw new Error(`Failed to rename path: ${oldPath} to ${newPath}`);
   }
 
   async readFile(roomId: string, filename: string): Promise<string> {
@@ -356,13 +293,19 @@ http {
     return output;
   }
 
-  async writeFile(roomId: string, filename: string, content: string): Promise<void> {
+  async writeFile(
+    roomId: string,
+    filename: string,
+    content: string
+  ): Promise<void> {
     const container = await this.getContainer(roomId);
     if (!container) throw new Error(`No container for room '${roomId}'`);
     const escapedContent = content.replace(/'/g, "'\\''");
     const { exitCode } = await this.fileSystemService.execInContainer(
       container.id,
-      `printf '%s' '${escapedContent}' > ${this.fileSystemService.escapePath(`/workspace/${filename}`)}`
+      `printf '%s' '${escapedContent}' > ${this.fileSystemService.escapePath(
+        `/workspace/${filename}`
+      )}`
     );
     if (exitCode !== 0) throw new Error(`Failed to write file: ${filename}`);
   }
@@ -383,7 +326,8 @@ http {
     const container = await this.getContainer(roomId);
     if (!container) return false;
 
-    const currentTree = this.roomFileTrees.get(roomId) || (await this.getFileTree(roomId));
+    const currentTree =
+      this.roomFileTrees.get(roomId) || (await this.getFileTree(roomId));
     const { toCreate, toDelete } = diffTrees(currentTree, newTree);
 
     await this.applyChangesToContainer(container.id, toCreate, toDelete);
@@ -391,21 +335,33 @@ http {
     return true;
   }
 
-  private async applyChangesToContainer(containerId: string, toCreate: string[], toDelete: string[]): Promise<void> {
+  private async applyChangesToContainer(
+    containerId: string,
+    toCreate: string[],
+    toDelete: string[]
+  ): Promise<void> {
     for (const path of toDelete) {
-      await this.fileSystemService.execInContainer(containerId, `rm -rf ${this.fileSystemService.escapePath(path)}`);
-    }
-    for (const path of toCreate) {
-      const isFolder = path.endsWith('/');
       await this.fileSystemService.execInContainer(
         containerId,
-        isFolder ? `mkdir -p ${this.fileSystemService.escapePath(path)}` : `touch ${this.fileSystemService.escapePath(path)}`
+        `rm -rf ${this.fileSystemService.escapePath(path)}`
+      );
+    }
+    for (const path of toCreate) {
+      const isFolder = path.endsWith("/");
+      await this.fileSystemService.execInContainer(
+        containerId,
+        isFolder
+          ? `mkdir -p ${this.fileSystemService.escapePath(path)}`
+          : `touch ${this.fileSystemService.escapePath(path)}`
       );
     }
   }
 }
 
-function diffTrees(currentTree: FileNode[], newTree: FileNode[]): { toCreate: string[]; toDelete: string[] } {
+function diffTrees(
+  currentTree: FileNode[],
+  newTree: FileNode[]
+): { toCreate: string[]; toDelete: string[] } {
   const currentPaths = new Set(flattenTree(currentTree));
   const newPaths = new Set(flattenTree(newTree));
   return {

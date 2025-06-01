@@ -32,25 +32,6 @@ export class WebSocketService {
     this.io.on("connection", (socket: Socket) => {
       console.log(`👤 User connected: ${socket.id}`);
 
-      socket.on("createRoom", async ({ image = "node:18" }) => {
-        
-        try {
-          const roomId = `room-${Date.now()}`;
-          const { containerId, hostPort } =
-            await this.dockerManager.createContainer({
-              image,
-              roomId,
-              exposedPort: 8080,
-            });
-          socket.emit("roomCreated", { roomId, containerId, hostPort });
-          await watchRoomFiles(roomId);
-          console.log(`✅ Room created: ${roomId} | Container: ${containerId}`);
-        } catch (error) {
-          console.error("❌ Error creating room:", error);
-          socket.emit("error", "Failed to create room");
-        }
-      });
-
       socket.on("joinRoom", async ({ roomId }) => {
         console.log(`👤 User ${socket.id} joining room: ${roomId}`);
         if (!this.roomUsers.has(roomId)) {

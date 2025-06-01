@@ -1,20 +1,20 @@
-import http from "http"
-import { WebSocketService } from "./Websocket/WebsocketService"
-import { HttpService } from "./http/HttpService"
+import http from "http";
+import { WebSocketService } from "./Websocket/WebsocketService";
+import { HttpService } from "./http/HttpService";
 // import { listBuckets } from "./AWS";
+import dotenv from "dotenv";
+dotenv.config();
 
-const HttpServiceInstance = new HttpService()
+const HttpServiceInstance = new HttpService();
 const server = http.createServer(HttpServiceInstance.app);
-export const webSocketServiceInstance = new WebSocketService(server)
+export const webSocketServiceInstance = new WebSocketService(server);
 
+server.listen(4000, () => {
+  console.log("✅ server running on port", 4000);
+});
 
-
-server.listen(4000,()=>{
-    console.log("✅ server running on port",4000)
-})
-
-const Docker = require('dockerode');
-const docker = new Docker();
+// const Docker = require('dockerode');
+// const docker = new Docker();
 
 // async function measureSpinUp(image = 'alpine:latest') {
 //   const start = Date.now();
