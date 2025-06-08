@@ -19,22 +19,25 @@ export class DockerManager {
   private roomFileTrees: Map<string, FileNode[]>;
   private networkName = process.env.NETWORK_NAME || "";
   public fileSystemService: FileSystemService;
-
+  
   constructor() {
+    console.log(process.env.VITE_SERVER)
     this.docker = new Docker();
     this.activeContainers = {};
     this.roomFileTrees = new Map();
     this.fileSystemService = new FileSystemService(this.docker);
   }
-
-  
   async createContainer(
     options: ContainerOptions
-  ): Promise<{ containerId: string }> {
+  ): Promise<{ containerId: string } | Error> {
     const { image, roomId, exposedPort = 8080, envVars = [] } = options;
-
     const containerName = `room-${roomId}`;
-    const host = `${containerName}.localhost`;
+    if(!process.env.VITE_SERVER) {
+      console.log('no vite server')
+      return new Error("no server")
+    }
+    // const host = `${containerName}.${process.env.VITE_SERVER}`;
+    const host = `${containerName}.localtest.me`;
 
     const container = await this.docker.createContainer({
       Image: image,
@@ -58,21 +61,41 @@ export class DockerManager {
         "traefik.enable": "true",
         "traefik.docker.network": this.networkName,
 
+        // Router configuration
         [`traefik.http.routers.${containerName}.rule`]: `Host(\`${host}\`)`,
         [`traefik.http.routers.${containerName}.entrypoints`]: "web",
+        [`traefik.http.routers.${containerName}.service`]: `${containerName}`,
+        // Apply CORS middleware
+        [`traefik.http.routers.${containerName}.middlewares`]: `${containerName}-cors`,
+
+        // Service configuration
         [`traefik.http.services.${containerName}.loadbalancer.server.port`]: `${exposedPort}`,
+
+        // CORS Middleware - Using customResponseHeaders (this works better for iframes)
+        [`traefik.http.middlewares.${containerName}-cors.headers.customResponseHeaders.Access-Control-Allow-Origin`]:
+          "*",
+        [`traefik.http.middlewares.${containerName}-cors.headers.customResponseHeaders.Access-Control-Allow-Methods`]:
+          "GET,POST,OPTIONS,PUT,DELETE,PATCH",
+        [`traefik.http.middlewares.${containerName}-cors.headers.customResponseHeaders.Access-Control-Allow-Headers`]:
+          "Accept,Authorization,Cache-Control,Content-Type,Origin,User-Agent,X-Requested-With",
+        [`traefik.http.middlewares.${containerName}-cors.headers.customResponseHeaders.Access-Control-Allow-Credentials`]:
+          "true",
+        [`traefik.http.middlewares.${containerName}-cors.headers.customResponseHeaders.X-Frame-Options`]:
+          "ALLOWALL",
+        [`traefik.http.middlewares.${containerName}-cors.headers.customResponseHeaders.Content-Security-Policy`]:
+          "frame-ancestors *",
       },
     });
 
     await container.start();
     this.activeContainers[roomId] = container.id;
+
     await this.fileSystemService.execInContainer(
       container.id,
       "apt update && apt install -y lsof grep tree socat"
     );
 
     this.monitorPorts(roomId, container.id);
-
     return { containerId: container.id };
   }
 

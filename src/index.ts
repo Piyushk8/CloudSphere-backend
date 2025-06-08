@@ -5,6 +5,7 @@ import { HttpService } from "./http/HttpService";
 import dotenv from "dotenv";
 dotenv.config();
 
+
 const HttpServiceInstance = new HttpService();
 const server = http.createServer(HttpServiceInstance.app);
 export const webSocketServiceInstance = new WebSocketService(server);

@@ -5,7 +5,7 @@ import { DockerManager, ContainerOptions } from "../Docker/DockerManager";
 import { WebSocketService } from "../Websocket/WebsocketService";
 import { randomUUID } from "crypto";
 import dotenv from "dotenv";
-import { streamR2FilesToContainer } from "../AWS";
+import { streamR2FilesToContainer, streamR2ZipToContainer } from "../AWS";
 import path from "path";
 import getLanguageConfig from "../lib/utils";
 
@@ -26,12 +26,24 @@ export class HttpService {
     this.app.use(express.json());
     this.app.use(
       cors({
-        origin: "http://localhost:5173",
+        origin: "*",
         methods: ["GET", "POST"],
         credentials: true,
       })
     );
-
+    // this.app.use((req, res, next) => {
+    //   res.header("Access-Control-Allow-Origin", "*");
+    //   res.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS,PUT,DELETE");
+    //   res.header(
+    //     "Access-Control-Allow-Headers",
+    //     "Content-Type,Authorization,X-Requested-With"
+    //   );
+    //   if (req.method === "OPTIONS") {
+    //     res.sendStatus(200);
+    //   } else {
+    //     next();
+    //   }
+    // });
     this.setupRoutes();
   }
 
@@ -42,11 +54,14 @@ export class HttpService {
     //@ts-ignore
     this.app.get("/files/:roomId", async (req: Request, res: Response) => {
       try {
+        console.log("here");
         const { roomId } = req.params;
+        console.log("roomID", roomId);
         const fileTree = await this.dockerManager.getFileTree(roomId);
         if (!fileTree || fileTree.length === 0) {
           return res.status(404).json({ error: "No file tree found for room" });
         }
+        console.log("filesTree", fileTree);
         const transformedTree = assignIds(fileTree);
         res.json({ transformedTree });
       } catch (error) {
@@ -76,20 +91,34 @@ export class HttpService {
           exposedPort: languageConfig.port,
           envVars: languageConfig.envVars,
         };
-        const { containerId} =
-          await this.dockerManager.createContainer(containerOptions);
-        // const tempDirPath = path.resolve("temp", roomId);
-        // Create a temporary directory to store files from R2
-        // await fs.mkdir(tempDirPath, { recursive: true });
-
+        const result = await this.dockerManager.createContainer(
+          containerOptions
+        );
+        if (result instanceof Error) {
+          // handle the error properly (log, throw, etc.)
+          console.error("Failed to create container:", result.message);
+          return res.json({ success: false });
+        }
+        const { containerId } = result;
         // Download the files from the specified R2 bucket and folder
-        await streamR2FilesToContainer(
-          process.env.CLOUDFLARE_R2_BUCKET || "",
-          `base/${language}`,
+        // await streamR2FilesToContainer(
+        //   process.env.CLOUDFLARE_R2_BUCKET || "",
+        //   `base/${language}`,
+        //   containerId,
+        //   "/workspace"
+        // );
+        await streamR2ZipToContainer(
+          process.env.CLOUDFLARE_R2_BUCKET!,
+          languageConfig.zipKey,
+          containerId
+        );
+
+        await this.dockerManager.fileSystemService.execInContainer(
           containerId,
-          "/workspace"
+          languageConfig.installCommand || ""
         );
         res.json({
+          success:true,
           message: "Room created successfully",
           roomId,
           containerId,
@@ -206,8 +235,6 @@ export class HttpService {
     });
   }
 }
-
-
 function assignIds(tree: any[], idCounter = { value: 1 }): any[] {
   return tree.map((node) => ({
     id: node.id || String(idCounter.value++),

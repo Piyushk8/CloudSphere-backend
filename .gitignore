@@ -5,3 +5,6 @@ node_modules/
 dist/
 storage/
 test.ts
+ngrokBE.yml
+ngrokFE.yml
+traefik-dynamic/

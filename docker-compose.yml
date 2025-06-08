@@ -11,6 +11,9 @@ services:
       - "--entrypoints.web.address=:80"      # HTTP entrypoint on port 80
       - "--log.level=INFO"
       - "--accesslog=true"
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--providers.file.watch=true"
+     
     ports:
       # The HTTP port
       - "80:80"
@@ -21,6 +24,8 @@ services:
     volumes:
       # So that Traefik can listen to the Docker events
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./traefik-dynamic:/etc/traefik/dynamic  # Mount the config directory
+   
 
 networks:
   traefik-network:

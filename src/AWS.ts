@@ -1,21 +1,24 @@
-
-import { S3Client, ListObjectsV2Command, GetObjectCommand } from '@aws-sdk/client-s3';
-import Docker from 'dockerode';
-import tar from 'tar-stream';
-import { Readable } from 'stream';
-import dotenv from 'dotenv';
-import { readdir } from 'fs/promises';
-import path from 'path';
+import {
+  S3Client,
+  ListObjectsV2Command,
+  GetObjectCommand,
+} from "@aws-sdk/client-s3";
+import Docker from "dockerode";
+import tar from "tar-stream";
+import { Readable } from "stream";
+import dotenv from "dotenv";
+import { readdir } from "fs/promises";
+import path from "path";
 
 dotenv.config(); // Load variables from .env
 
 // Initialize R2 client using AWS SDK v3
 const r2Client = new S3Client({
-  region: 'auto',
+  region: "auto",
   endpoint: process.env.CLOUDFLARE_R2_ENDPOINT, // e.g., https://<ACCOUNT_ID>.r2.cloudflarestorage.com
   credentials: {
-    accessKeyId: process.env.CLOUDFLARE_R2_ACCESS_KEY || '',
-    secretAccessKey: process.env.CLOUDFLARE_R2_SECRET_KEY || '',
+    accessKeyId: process.env.CLOUDFLARE_R2_ACCESS_KEY || "",
+    secretAccessKey: process.env.CLOUDFLARE_R2_SECRET_KEY || "",
   },
 });
 
@@ -30,7 +33,9 @@ export const streamR2FilesToContainer = async (
 ) => {
   // Validate parameters
   if (!r2BucketName || !r2Folder || !containerId || !containerDir) {
-    throw new Error('R2 bucket name, folder prefix, container ID, and container directory are required');
+    throw new Error(
+      "R2 bucket name, folder prefix, container ID, and container directory are required"
+    );
   }
 
   // Verify container exists and is running
@@ -54,17 +59,19 @@ export const streamR2FilesToContainer = async (
   try {
     const { Contents } = await r2Client.send(listCommand);
     if (!Contents || Contents.length === 0) {
-      throw new Error(`No files found in R2 bucket ${r2BucketName} under prefix ${r2Folder}`);
+      throw new Error(
+        `No files found in R2 bucket ${r2BucketName} under prefix ${r2Folder}`
+      );
     }
 
     // Process each file
     for (const obj of Contents) {
-      if (!obj.Key) continue; 
-      if (obj.Key.endsWith('/')) continue; 
+      if (!obj.Key) continue;
+      if (obj.Key.endsWith("/")) continue;
 
       // Construct relative path for the container
-      const relativeKey = obj.Key.replace(r2Folder, '').replace(/^\//, ''); // Remove prefix
-      const containerFilePath = containerDir.endsWith('/')
+      const relativeKey = obj.Key.replace(r2Folder, "").replace(/^\//, ""); // Remove prefix
+      const containerFilePath = containerDir.endsWith("/")
         ? `${containerDir}${relativeKey}`
         : `${containerDir}/${relativeKey}`;
 
@@ -91,9 +98,9 @@ export const streamR2FilesToContainer = async (
           // Collect stream into Buffer
           fileContent = await new Promise<Buffer>((resolve, reject) => {
             const chunks: Buffer[] = [];
-            Body.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-            Body.on('end', () => resolve(Buffer.concat(chunks)));
-            Body.on('error', reject);
+            Body.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+            Body.on("end", () => resolve(Buffer.concat(chunks)));
+            Body.on("error", reject);
           });
         } else {
           // Handle non-stream body
@@ -116,15 +123,64 @@ export const streamR2FilesToContainer = async (
       }
     }
 
-    console.log(`Completed streaming files to container ${containerId} at ${containerDir}`);
+    console.log(
+      `Completed streaming files to container ${containerId} at ${containerDir}`
+    );
   } catch (error: any) {
-    console.error('Error processing R2 files:', error);
+    console.error("Error processing R2 files:", error);
     throw new Error(`Failed to stream files to container: ${error.message}`);
   }
 };
 
+export const streamR2ZipToContainer = async (
+  bucket: string,
+  zipKey: string,
+  containerId: string,
+  destPathInContainer: string = "/workspace"
+) => {
+  const container = docker.getContainer(containerId);
+
+  // Get zip from R2
+  const { Body } = await r2Client.send(
+    new GetObjectCommand({
+      Bucket: bucket,
+      Key: `base/${zipKey}`,
+    })
+  );
+
+  if (!Body) throw new Error("R2 object has no body");
+
+  // Safely cast Body
+  const stream = Body as Readable;
+
+  const zipBuffer = await new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    stream.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    stream.on("end", () => resolve(Buffer.concat(chunks)));
+    stream.on("error", reject);
+  });
+
+  // Wrap into tar archive
+  const pack = tar.pack();
+  pack.entry({ name: "base.zip" }, zipBuffer);
+  pack.finalize();
+
+  // Send tar stream to container
+  await container.putArchive(pack, {
+    path: destPathInContainer,
+  });
+
+  console.log(
+    `✅ Streamed ${zipKey} into ${containerId} as /workspace/base.zip`
+  );
+};
+
 // Optional: Reuse existing copyFilesToContainer if needed for other local-to-container tasks
-export const copyFilesToContainer = async (containerId: string, localDir: string, containerDir: string) => {
+export const copyFilesToContainer = async (
+  containerId: string,
+  localDir: string,
+  containerDir: string
+) => {
   const container = docker.getContainer(containerId);
 
   try {
@@ -135,17 +191,19 @@ export const copyFilesToContainer = async (containerId: string, localDir: string
 
     const files = await readdir(localDir, { recursive: true });
     const validFiles = files.filter((file) =>
-      require('fs').statSync(path.join(localDir, file)).isFile()
+      require("fs").statSync(path.join(localDir, file)).isFile()
     );
     if (validFiles.length === 0) {
-      throw new Error('No files found to copy from the local directory');
+      throw new Error("No files found to copy from the local directory");
     }
 
     const pack = tar.pack();
     for (const file of validFiles) {
       const filePath = path.join(localDir, file);
-      const relativePath = path.relative(localDir, filePath).replace(/\\/g, '/');
-      const fileContent = require('fs').readFileSync(filePath);
+      const relativePath = path
+        .relative(localDir, filePath)
+        .replace(/\\/g, "/");
+      const fileContent = require("fs").readFileSync(filePath);
       pack.entry({ name: relativePath }, fileContent);
     }
     pack.finalize();
@@ -154,9 +212,11 @@ export const copyFilesToContainer = async (containerId: string, localDir: string
       path: containerDir,
     });
 
-    console.log(`Copied ${validFiles.length} files into container at ${containerDir}`);
+    console.log(
+      `Copied ${validFiles.length} files into container at ${containerDir}`
+    );
   } catch (error: any) {
-    console.error('Error copying files to container:', error);
+    console.error("Error copying files to container:", error);
     throw new Error(`Failed to copy files to container: ${error.message}`);
   }
 };
