@@ -1,0 +1,11 @@
+{
+  "language": "python",
+  "project_dir": "/workspace",
+  "entry": "main.py",
+  "run": "python main.py",
+  "env": {
+    "FLASK_ENV": "development",
+    "PORT": "5000"
+  },
+  "start_delay": 0
+}

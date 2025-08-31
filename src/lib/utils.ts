@@ -16,8 +16,9 @@ export default function getLanguageConfig(language: string) {
       zipKey: "nodejs",
       installCommand: `
           apt update && apt install -y unzip && \
+          chmod +x /runner.sh && \
           cd /workspace && unzip base.zip -d . && rm base.zip && \
-          npm install
+          npm install && npm i nodemon
         `,
     },
     expressjs: {
@@ -26,8 +27,9 @@ export default function getLanguageConfig(language: string) {
       zipKey: "expressjs.zip",
       installCommand: `
           apt update && apt install -y unzip && \
+          chmod +x /runner.sh && \
           cd /workspace && unzip base.zip -d . && rm base.zip && \
-          npm install
+          npm install && npm i nodemom
         `,
       envVars: ["NODE_ENV=development"],
     },
@@ -35,24 +37,29 @@ export default function getLanguageConfig(language: string) {
       zipKey: "python",
       installCommand: `
           apt update && apt install -y unzip && \
-          cd /workspace && unzip base.zip -d . && rm base.zip && \
-          cd reactjs && npm install && npm run dev
-        `,
+          cd /workspace \
+          `,
       image: "python:3.10",
       port: 5000,
       envVars: ["FLASK_ENV=development"],
     },
-    cpp: { image: "gcc:13", port: 8080 ,zipKey:"cpp"},
-    java: { image: "openjdk:17", port: 8080, envVars: ["JAVA_OPTS=-Xmx512m"],zipKey:"java" },
-    go: { image: "golang:1.19", port: 8080, envVars: [],zipKey:"go" },
+    cpp: { image: "gcc:13", port: 8080, zipKey: "cpp" },
+    java: {
+      image: "openjdk:17",
+      port: 8080,
+      envVars: ["JAVA_OPTS=-Xmx512m"],
+      zipKey: "java",
+    },
+    go: { image: "golang:1.19", port: 8080, envVars: [], zipKey: "go" },
     reactjs: {
       image: "node:18",
       port: 5173,
       zipKey: "reactjs.zip",
       installCommand: `
           apt update && apt install -y unzip && \
+          chmod +x /runner.sh && \
           cd /workspace && unzip base.zip -d . && rm base.zip && \
-          cd reactjs && npm install
+          npm install
         `,
       envVars: ["HOST=0.0.0.0", "PORT=5173"],
     },
@@ -62,10 +69,11 @@ export default function getLanguageConfig(language: string) {
       zipKey: "nextjs.zip",
       installCommand: `
           apt update && apt install -y unzip && \
+          chmod +x /runner.sh && \
           cd /workspace && unzip base.zip -d . && rm base.zip && \
-          cd nextjs && npm install && npm run dev
+          npm install 
         `,
-      envVars: ["HOST=0.0.0.0", "PORT=5173"],
+      envVars: ["HOST=0.0.0.0"],
     },
   };
   return config[language.toLowerCase()] || null;

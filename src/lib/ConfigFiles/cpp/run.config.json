@@ -1,0 +1,9 @@
+{
+  "language": "cpp",
+  "project_dir": "/workspace",
+  "entry": "main.cpp",
+  "build": "g++ main.cpp -o main",
+  "run": "./main",
+  "env": {},
+  "start_delay": 0
+}

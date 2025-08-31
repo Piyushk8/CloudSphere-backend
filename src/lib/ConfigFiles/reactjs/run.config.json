@@ -1,0 +1,8 @@
+{
+  "language": "nodejs",
+  "project_dir": ".",
+  "run": "npm run dev",
+  "env": {
+    "PORT": "5173"
+  }
+}

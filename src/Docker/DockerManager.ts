@@ -19,9 +19,9 @@ export class DockerManager {
   private roomFileTrees: Map<string, FileNode[]>;
   private networkName = process.env.NETWORK_NAME || "";
   public fileSystemService: FileSystemService;
-  
+
   constructor() {
-    console.log(process.env.VITE_SERVER)
+    console.log(process.env.VITE_SERVER);
     this.docker = new Docker();
     this.activeContainers = {};
     this.roomFileTrees = new Map();
@@ -32,9 +32,10 @@ export class DockerManager {
   ): Promise<{ containerId: string } | Error> {
     const { image, roomId, exposedPort = 8080, envVars = [] } = options;
     const containerName = `room-${roomId}`;
-    if(!process.env.VITE_SERVER) {
-      console.log('no vite server')
-      return new Error("no server")
+    console.log(process.env.VITE_SERVER);
+    if (!process.env.VITE_SERVER) {
+      console.log("no vite server");
+      return new Error("no server");
     }
     // const host = `${containerName}.${process.env.VITE_SERVER}`;
     const host = `${containerName}.localtest.me`;
@@ -60,6 +61,8 @@ export class DockerManager {
       Labels: {
         "traefik.enable": "true",
         "traefik.docker.network": this.networkName,
+        [`traefik.http.services.${containerName}.loadbalancer.passhostheader`]:
+          "false",
 
         // Router configuration
         [`traefik.http.routers.${containerName}.rule`]: `Host(\`${host}\`)`,
@@ -92,7 +95,7 @@ export class DockerManager {
 
     await this.fileSystemService.execInContainer(
       container.id,
-      "apt update && apt install -y lsof grep tree socat"
+      "apt update && apt install -y lsof tree socat &&  apt update && apt install -y jq && apt update && apt install --yes net-tools"
     );
 
     this.monitorPorts(roomId, container.id);
@@ -102,11 +105,12 @@ export class DockerManager {
   async getActivePorts(containerId: string): Promise<string[]> {
     const { output } = await this.fileSystemService.execInContainer(
       containerId,
-      "lsof -i -P -n | grep LISTEN"
+      "netstat -tuln | grep LISTEN"
     );
+
     return output
       .split("\n")
-      .map((line) => line.match(/:(\d+)\s+\(LISTEN\)/)?.[1])
+      .map((line) => line.match(/:(\d+)\s+/)?.[1])
       .filter((port): port is string => !!port);
   }
 

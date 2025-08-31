@@ -21,7 +21,15 @@ const r2Client = new S3Client({
     secretAccessKey: process.env.CLOUDFLARE_R2_SECRET_KEY || "",
   },
 });
-
+// const r2Client = new S3Client({
+//   region: "auto",
+//   endpoint: process.env.CLOUDFLARE_R2_ENDPOINT,
+//   forcePathStyle: true,
+//   credentials: {
+//     accessKeyId: process.env.CLOUDFLARE_R2_ACCESS_KEY || "",
+//     secretAccessKey: process.env.CLOUDFLARE_R2_SECRET_KEY || "",
+//   },
+// });
 const docker = new Docker();
 
 // Stream files from R2 directly to a Docker container
@@ -141,6 +149,7 @@ export const streamR2ZipToContainer = async (
   const container = docker.getContainer(containerId);
 
   // Get zip from R2
+  console.log("🅿️zipkey",zipKey)
   const { Body } = await r2Client.send(
     new GetObjectCommand({
       Bucket: bucket,
@@ -219,4 +228,21 @@ export const copyFilesToContainer = async (
     console.error("Error copying files to container:", error);
     throw new Error(`Failed to copy files to container: ${error.message}`);
   }
+};
+export const copyFileToContainer = async (
+  containerId: string,
+  localFilePath: string,
+  containerDir: string
+) => {
+  const container = docker.getContainer(containerId);
+
+  const content = require("fs").readFileSync(localFilePath);
+  const fileName = path.basename(localFilePath);
+
+  const pack = tar.pack();
+  pack.entry({ name: fileName }, content);
+  pack.finalize();
+
+  await container.putArchive(pack, { path: containerDir });
+  console.log(`✅ Copied ${fileName} to ${containerDir} in ${containerId}`);
 };

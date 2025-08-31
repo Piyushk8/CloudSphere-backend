@@ -32,6 +32,10 @@ export class WebSocketService {
     this.io.on("connection", (socket: Socket) => {
       console.log(`👤 User connected: ${socket.id}`);
 
+      socket.on("connect", () => {
+        console.log(`✅ Socket connected: ${socket.id}`);
+      });
+
       socket.on("joinRoom", async ({ roomId }) => {
         console.log(`👤 User ${socket.id} joining room: ${roomId}`);
         if (!this.roomUsers.has(roomId)) {
@@ -128,6 +132,35 @@ export class WebSocketService {
         if (terminal.pty.cols !== cols || terminal.pty.rows !== rows) {
           console.log(`📏 Resizing PTY ${key} to ${cols}x${rows}`);
           resizeTerminal(terminal.pty, cols, rows);
+        }
+      });
+      socket.on("run", async ({ containerId }) => {
+        console.log("💻 Run triggered for container:", containerId);
+
+        try {
+          const result =
+            await this.dockerManager.fileSystemService.execInContainer(
+              containerId,
+              "bash /runner.sh"
+            );
+          console.log("✅ Run completed:", result);
+        } catch (error) {
+          console.error("❌ Error running script in container:", error);
+          socket.emit("run-error", { containerId, error: error });
+        }
+      });
+      socket.on("stop", async ({ containerId }) => {
+        console.log("💻 Run triggered for container:", containerId);
+
+        try {
+          const result =
+            await this.dockerManager.fileSystemService.execInContainer(
+              containerId,
+              "kill $(cat /tmp/app.pid)"
+            );
+        } catch (error) {
+          console.error("❌ Error stopping in container:", error);
+          socket.emit("run-error", { containerId, error: error });
         }
       });
 

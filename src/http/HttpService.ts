@@ -5,7 +5,12 @@ import { DockerManager, ContainerOptions } from "../Docker/DockerManager";
 import { WebSocketService } from "../Websocket/WebsocketService";
 import { randomUUID } from "crypto";
 import dotenv from "dotenv";
-import { streamR2FilesToContainer, streamR2ZipToContainer } from "../AWS";
+import {
+  copyFilesToContainer,
+  copyFileToContainer,
+  streamR2FilesToContainer,
+  streamR2ZipToContainer,
+} from "../AWS";
 import path from "path";
 import getLanguageConfig from "../lib/utils";
 
@@ -79,6 +84,7 @@ export class HttpService {
             .status(400)
             .json({ error: "Language selection is required" });
         }
+
         const languageConfig = getLanguageConfig(language);
         if (!languageConfig) {
           return res.status(400).json({ error: "Unsupported language" });
@@ -91,41 +97,62 @@ export class HttpService {
           exposedPort: languageConfig.port,
           envVars: languageConfig.envVars,
         };
+
         const result = await this.dockerManager.createContainer(
           containerOptions
         );
         if (result instanceof Error) {
-          // handle the error properly (log, throw, etc.)
           console.error("Failed to create container:", result.message);
-          return res.json({ success: false });
+          return res
+            .status(500)
+            .json({ success: false, error: "Container creation failed" });
         }
-        const { containerId } = result;
-        // Download the files from the specified R2 bucket and folder
-        // await streamR2FilesToContainer(
-        //   process.env.CLOUDFLARE_R2_BUCKET || "",
-        //   `base/${language}`,
-        //   containerId,
-        //   "/workspace"
-        // );
-        await streamR2ZipToContainer(
-          process.env.CLOUDFLARE_R2_BUCKET!,
-          languageConfig.zipKey,
-          containerId
-        );
 
+        const { containerId } = result;
+
+        if (
+          ["reactjs", "nextjs", "expressjs"].includes(language.toLowerCase())
+        ) {
+          const res1 =await streamR2ZipToContainer(
+            process.env.CLOUDFLARE_R2_BUCKET!,
+            languageConfig.zipKey,
+            containerId
+          );
+          // console.log("res1",res1)
+        } else {
+          const res2 =await streamR2FilesToContainer(
+            process.env.CLOUDFLARE_R2_BUCKET!,
+            `base/${language}`,
+            containerId,
+            "/workspace"
+          );
+          // console.log("res2",res2)
+        }
+        // Copy config files to container
+        const res3 = await copyFileToContainer(
+          containerId,
+          `./src/lib/ConfigFiles/${language}/run.config.json`,
+          "/workspace"
+        );
+        
+        // console.log("res3",res3)
+        await copyFileToContainer(containerId, `./src/lib/runner.sh`, "/");
+
+        // Install dependencies / prepare environment
         await this.dockerManager.fileSystemService.execInContainer(
           containerId,
           languageConfig.installCommand || ""
         );
-        res.json({
-          success:true,
+
+        return res.json({
+          success: true,
           message: "Room created successfully",
           roomId,
           containerId,
         });
       } catch (error) {
-        console.error("Error creating room:", error);
-        res.status(500).json({ error: "Failed to create room" });
+        console.error("❌ Error creating room:", error);
+        return res.status(500).json({ error: "Failed to create room" });
       }
     });
 

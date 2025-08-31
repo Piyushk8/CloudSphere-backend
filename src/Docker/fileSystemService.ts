@@ -8,10 +8,50 @@ export interface FileNode {
   path: string;
   type: FileType;
   children?: FileNode[];
+  size?: number;
+  lastModified?: Date;
 }
 
 export class FileSystemService {
   private docker: Docker;
+  // Production-ready blacklist for common unwanted directories
+  private readonly BLACKLISTED_DIRS = new Set([
+    'node_modules',
+    '.git',
+    '.svn',
+    '.hg',
+    'dist',
+    'build',
+    'coverage',
+    '.nyc_output',
+    'logs',
+    '*.log',
+    '.DS_Store',
+    'Thumbs.db',
+    '.vscode',
+    '.idea',
+    '.pytest_cache',
+    '__pycache__',
+    '.cache',
+    'tmp',
+    'temp',
+    '.tmp',
+    '.temp',
+    'vendor',
+    '.vendor',
+    '.next',
+    '.nuxt',
+    'out',
+    '.out',
+    'target',
+    '.gradle',
+    '.mvn',
+    'bin',
+    'obj',
+    '.sass-cache',
+    '.parcel-cache',
+    '.turbo'
+  ]);
 
   constructor(docker: Docker) {
     this.docker = docker;
@@ -70,99 +110,286 @@ export class FileSystemService {
     }
   }
 
-  /**
-   * Retrieves the file tree for the /workspace directory in a container.
-   */
-  async getFileTree(containerId: string): Promise<FileNode[]> {
-    const { output } = await this.execInContainer(
-      containerId,
-      `find /workspace -printf '%y|%p|%m\\n' 2>/tmp/find_errors.log || cat /tmp/find_errors.log`
-    );
+  // File extensions to treat as executable
+  private readonly EXECUTABLE_EXTENSIONS = new Set([
+    '.sh', '.bash', '.zsh', '.fish', '.bat', '.cmd', '.ps1',
+    '.exe', '.app', '.deb', '.rpm', '.dmg', '.pkg'
+  ]);
 
-    if (!output) {
-      console.warn(`No output from find in container ${containerId}`);
-      return [];
-    }
+  async getFileTree(containerId: string, maxDepth: number = 10): Promise<FileNode[]> {
+    try {
+      // Use a more robust find command with better error handling
+      const blacklistPattern = Array.from(this.BLACKLISTED_DIRS)
+        .map(dir => `-name "${dir}"`)
+        .join(' -o ');
 
-    const paths = output
-      .split('\n')
-      .map((line): { path: string; type: FileType; mode: number } | null => {
-        if (!line.trim()) return null;
-        const [typeChar, path, mode] = line.split('|', 3);
-        if (!typeChar || !path || !mode) return null;
-        let type: FileType;
-        switch (typeChar) {
-          case 'd': type = 'folder'; break;
-          case 'f': type = 'file'; break;
-          case 'l': type = 'symlink'; break;
-          default: return null;
-        }
-        return { path, type, mode: parseInt(mode, 8) };
-      })
-      .filter((entry): entry is { path: string; type: FileType; mode: number } => entry !== null);
+      const findCommand = `
+        find /workspace -maxdepth ${maxDepth} \\
+          \\( ${blacklistPattern} \\) -prune -o \\
+          -type f -printf 'f|%p|%s|%T@\\n' -o \\
+          -type d -printf 'd|%p|0|%T@\\n' -o \\
+          -type l -printf 'l|%p|0|%T@\\n' \\
+        2>/dev/null | grep -v '^[fdl]|/workspace$' | head -10000
+      `;
 
-    paths.forEach((entry) => {
-      if (entry.type === 'file' && (entry.mode & 0o111) !== 0) {
-        entry.type = 'executable';
+      const { output } = await this.execInContainer(containerId, findCommand);
+
+      if (!output?.trim()) {
+        console.warn(`No output from find in container ${containerId}`);
+        return this.createEmptyWorkspaceTree();
       }
-    });
 
-    return this.buildTree(paths);
+      return this.parseAndBuildTree(output);
+    } catch (error) {
+      console.error(`Error getting file tree for container ${containerId}:`, error);
+      return this.createEmptyWorkspaceTree();
+    }
   }
 
-  /** Builds a hierarchical file tree from a flat list of paths. */
-  private buildTree(paths: { path: string; type: FileType }[]): FileNode[] {
-    const tree: Record<string, FileNode> = {};
+  private parseAndBuildTree(output: string): FileNode[] {
+    const entries: Array<{
+      path: string;
+      type: FileType;
+      size: number;
+      lastModified: Date;
+    }> = [];
+
+    const lines = output.trim().split('\n').filter(line => line.trim());
+    
+    for (const line of lines) {
+      const parts = line.split('|');
+      if (parts.length !== 4) continue;
+
+      const [typeChar, fullPath, sizeStr, timestampStr] = parts;
+      
+      // Skip invalid paths or paths outside workspace
+      if (!fullPath.startsWith('/workspace/') || fullPath === '/workspace') {
+        continue;
+      }
+
+      // Skip blacklisted items (additional check)
+      const pathParts = fullPath.split('/');
+      if (pathParts.some(part => this.BLACKLISTED_DIRS.has(part))) {
+        continue;
+      }
+
+      let type: FileType;
+      switch (typeChar) {
+        case 'd':
+          type = 'folder';
+          break;
+        case 'f':
+          type = this.isExecutableFile(fullPath) ? 'executable' : 'file';
+          break;
+        case 'l':
+          type = 'symlink';
+          break;
+        default:
+          continue;
+      }
+
+      const size = parseInt(sizeStr, 10) || 0;
+      const lastModified = new Date(parseFloat(timestampStr) * 1000);
+
+      entries.push({
+        path: fullPath,
+        type,
+        size,
+        lastModified
+      });
+    }
+
+    return this.buildHierarchicalTree(entries);
+  }
+
+  private buildHierarchicalTree(entries: Array<{
+    path: string;
+    type: FileType;
+    size: number;
+    lastModified: Date;
+  }>): FileNode[] {
+    const nodeMap = new Map<string, FileNode>();
     let idCounter = 1;
 
-    tree['/workspace'] = {
+    // Create root workspace node
+    const rootNode: FileNode = {
       id: String(idCounter++),
       name: 'workspace',
       path: '/workspace',
       type: 'folder',
-      children: [],
+      children: []
     };
+    nodeMap.set('/workspace', rootNode);
 
-    paths.forEach(({ path, type }) => {
-      if (path === '/workspace' && type === 'folder') return;
-      const parts = path.split('/').filter(Boolean);
-      if (parts[0] !== 'workspace') return;
-      let parentKey = '';
-      for (let i = 0; i < parts.length; i++) {
-        const isLeaf = i === parts.length - 1;
-        const key = '/' + parts.slice(0, i + 1).join('/');
-        if (!tree[key]) {
-          tree[key] = {
+    // Sort entries by path depth to ensure parents are created before children
+    entries.sort((a, b) => {
+      const depthA = a.path.split('/').length;
+      const depthB = b.path.split('/').length;
+      return depthA - depthB;
+    });
+
+    for (const entry of entries) {
+      const { path, type, size, lastModified } = entry;
+      
+      // Skip if already exists
+      if (nodeMap.has(path)) continue;
+
+      // Get the file/folder name (last part of path)
+      const pathParts = path.split('/').filter(Boolean);
+      const name = pathParts[pathParts.length - 1];
+      
+      // Create the node
+      const node: FileNode = {
+        id: String(idCounter++),
+        name,
+        path,
+        type,
+        ...(type !== 'folder' && { size }),
+        lastModified,
+        ...(type === 'folder' && { children: [] })
+      };
+
+      nodeMap.set(path, node);
+
+      // Find and create parent directories if they don't exist
+      let parentPath = '/workspace';
+      for (let i = 2; i < pathParts.length; i++) { // Start from 2 to skip 'workspace'
+        const currentPath = '/' + pathParts.slice(0, i).join('/');
+        
+        if (!nodeMap.has(currentPath)) {
+          const parentName = pathParts[i - 1];
+          const parentNode: FileNode = {
             id: String(idCounter++),
-            name: parts[i],
-            path: key,
-            type: isLeaf ? type : 'folder',
-            children: isLeaf ? undefined : [],
+            name: parentName,
+            path: currentPath,
+            type: 'folder',
+            children: []
           };
-        } else if (!isLeaf && tree[key].type !== 'folder') {
-          tree[key].type = 'folder';
-          tree[key].children = tree[key].children || [];
-        }
-        if (parentKey && tree[parentKey]) {
-          tree[parentKey].children = tree[parentKey].children || [];
-          if (!tree[parentKey].children!.some((child) => child.path === key)) {
-            tree[parentKey].children!.push(tree[key]);
+          nodeMap.set(currentPath, parentNode);
+
+          // Add to its parent
+          const grandParent = nodeMap.get(parentPath);
+          if (grandParent?.children) {
+            grandParent.children.push(parentNode);
           }
         }
-        parentKey = key;
+        parentPath = currentPath;
       }
-    });
 
-    Object.values(tree).forEach((node) => {
-      if (node.children) {
-        node.children.sort((a, b) => a.name.localeCompare(b.name));
+      // Add current node to its parent
+      const parent = nodeMap.get(parentPath);
+      if (parent?.children && !parent.children.some(child => child.path === path)) {
+        parent.children.push(node);
       }
-    });
+    }
 
-    return tree['/workspace'] ? [tree['/workspace']] : [];
+    // Sort all children alphabetically (folders first, then files)
+    this.sortTreeNodes(rootNode);
+
+    return [rootNode];
   }
 
-  public async getFullFileTree(containerId: string): Promise<FileNode[]> {
-    return this.getFileTree(containerId);
+  private sortTreeNodes(node: FileNode): void {
+    if (!node.children) return;
+
+    // Sort children: folders first, then by name
+    node.children.sort((a, b) => {
+      // Folders come first
+      if (a.type === 'folder' && b.type !== 'folder') return -1;
+      if (a.type !== 'folder' && b.type === 'folder') return 1;
+      
+      // Then sort alphabetically (case-insensitive)
+      return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+    });
+
+    // Recursively sort children
+    for (const child of node.children) {
+      this.sortTreeNodes(child);
+    }
+  }
+
+  private isExecutableFile(filePath: string): boolean {
+    const ext = this.getFileExtension(filePath);
+    return this.EXECUTABLE_EXTENSIONS.has(ext);
+  }
+
+  private getFileExtension(filePath: string): string {
+    const lastDot = filePath.lastIndexOf('.');
+    return lastDot > 0 ? filePath.substring(lastDot).toLowerCase() : '';
+  }
+
+  private createEmptyWorkspaceTree(): FileNode[] {
+    return [{
+      id: '1',
+      name: 'workspace',
+      path: '/workspace',
+      type: 'folder',
+      children: []
+    }];
+  }
+
+  // Public method for getting full tree (same as getFileTree but with explicit naming)
+  public async getFullFileTree(containerId: string, maxDepth?: number): Promise<FileNode[]> {
+    return this.getFileTree(containerId, maxDepth);
+  }
+
+  // Helper method to get tree with custom blacklist
+  public async getFileTreeWithCustomBlacklist(
+    containerId: string, 
+    additionalBlacklist: string[] = [],
+    maxDepth: number = 10
+  ): Promise<FileNode[]> {
+    const originalBlacklist = new Set(this.BLACKLISTED_DIRS);
+    
+    // Temporarily add custom blacklist items
+    additionalBlacklist.forEach(item => this.BLACKLISTED_DIRS.add(item));
+    
+    try {
+      return await this.getFileTree(containerId, maxDepth);
+    } finally {
+      // Restore original blacklist
+      this.BLACKLISTED_DIRS.clear();
+      originalBlacklist.forEach(item => this.BLACKLISTED_DIRS.add(item));
+    }
+  }
+
+  // Helper method to check if a path should be blacklisted
+  public isBlacklisted(path: string): boolean {
+    const pathParts = path.split('/');
+    return pathParts.some(part => this.BLACKLISTED_DIRS.has(part));
+  }
+
+  // Method to get file tree statistics
+  public async getFileTreeStats(containerId: string): Promise<{
+    totalFiles: number;
+    totalFolders: number;
+    totalSize: number;
+    largestFile: { name: string; size: number } | null;
+  }> {
+    const tree = await this.getFileTree(containerId);
+    const stats = {
+      totalFiles: 0,
+      totalFolders: 0,
+      totalSize: 0,
+      largestFile: null as { name: string; size: number } | null
+    };
+
+    const traverse = (node: FileNode) => {
+      if (node.type === 'folder') {
+        stats.totalFolders++;
+        node.children?.forEach(traverse);
+      } else {
+        stats.totalFiles++;
+        if (node.size) {
+          stats.totalSize += node.size;
+          if (!stats.largestFile || node.size > stats.largestFile.size) {
+            stats.largestFile = { name: node.name, size: node.size };
+          }
+        }
+      }
+    };
+
+    tree.forEach(traverse);
+    return stats;
   }
 }

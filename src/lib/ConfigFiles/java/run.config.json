@@ -1,0 +1,9 @@
+{
+  "language": "java",
+  "project_dir": "/workspace",
+  "entry": "Main.java",
+  "build": "javac Main.java",
+  "run": "java Main",
+  "env": {},
+  "start_delay": 0
+}

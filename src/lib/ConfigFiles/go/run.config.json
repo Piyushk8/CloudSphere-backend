@@ -1,0 +1,10 @@
+{
+  "language": "go",
+  "project_dir": "/workspace",
+  "entry": "main.go",
+  "run": "go run main.go",
+  "env": {
+    "PORT": "8080"
+  },
+  "start_delay": 0
+}
