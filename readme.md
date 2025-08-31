@@ -1,55 +1,31 @@
 
 # 🌐 Cloud IDE
+Think Replit, but with Docker containers, real file systems, and full-stack muscle.
+This cloud-based collaborative IDE isn’t just for tinkering — it’s built for real development, with full support for:
 
-A **cloud-based collaborative IDE** that supports real-time terminal access, file editing, and Docker-isolated execution per user. Built for PERN projects and more, with support for web preview, file syncing, collaboration, and real-time terminal.
+🐳 Isolated Docker environments per user
+🧠 PERN-ready (Postgres, Express, React, Node)
+💻 Real-time terminal + Monaco code editing
+🔄 Live file syncing from container to UI
+🚀 Live preview for React, Express, or any app you spin up
+🤝 Built-in collaboration (coming soon!)
 
+It’s like hosting your own VS Code + Docker + Terminal + Preview in the cloud, minus the headaches. Whether you're prototyping a side project, teaching a bootcamp, or demoing an app.
 ---
 
 # Demo video:
-Landing Page UI:
-![Screenshot 2025-04-28 034210](https://github.com/user-attachments/assets/ce04eed3-fa74-42be-a119-dccd281f8196)
-
-Room UI:
-
-https://github.com/user-attachments/assets/1623032d-eb83-4148-9908-7762d6df4b2e
-
-
-## 📁 Project Structure
-
-```
-cloud-ide/
-├── backend/
-│   ├── Docker/                  # Docker container orchestration
-│   ├── services/                # File tree, terminal, exec services
-│   ├── sockets/                 # WebSocket communication (Socket.io)
-│   ├── utils/                   # In-container file watcher, debounce, etc.
-│   ├── DockerManager.ts         # Container lifecycle and interaction
-│   └── server.ts                # Express server + WebSocket setup
-├── frontend/
-│   ├── src/
-│   │   ├── components/          # File tree, terminal, editor
-│   │   ├── context/             # Room & Socket context
-│   │   ├── hooks/               # Custom logic for terminal, file sync
-│   │   └── App.tsx              # Main app
-│   └── vite.config.ts           # Vite + proxy config
-├── docker-compose.yml
-├── nginx.conf                   # Reverse proxy config
-└── README.md
-```
-
----
+https://github.com/user-attachments/assets/7a3a354f-84b9-4b2b-90f2-58d57c3b8ee2
 
 ## 🔧 Backend
 
 ### 🧱 Features
-
 - One Docker container per user/room
 - Terminal powered by `node-pty` & xterm.js
 - Real-time collaboration with Socket.IO
 - File syncing via in-container `inotifywait`
 - File persistnace and storage on S3 bucket
 - Dynamic port detection for running apps (React, Express, etc.)
-- Reverse proxy support via Nginx
+- Reverse proxy support via Traefik
 
 ### 🚀 Setup Instructions
 
@@ -139,24 +115,14 @@ Make sure backend is running and Vite proxy is configured to forward `/api` and 
 
 ---
 
-## 🌐 Nginx 
+## 🌐 Traefik Reverse Proxy
 
-1. **Proxy Vite (5173), API (3001), and dynamic app ports**
-2. Example location block:
+Traefik automatically detects running services and routes them based on labels in `docker-compose.yml`.
 
-```nginx
-location / {
-  proxy_pass http://localhost:5173;
-}
+- Routes dev server (`5173`), API (`3001`), and dynamic preview ports
+- Replace legacy NGINX config with label-based routing
+- TLS + domain management (coming soon)
 
-location /api/ {
-  proxy_pass http://localhost:3001;
-}
-
-location /app/ {
-  proxy_pass http://localhost:49153;  # Sample exposed container port
-}
-```
 
 ## ✅ To Do / Improvements
 
@@ -175,4 +141,4 @@ location /app/ {
 - **Frontend:** React, TypeScript, Vite, xterm.js, Monaco Editor
 - **Backend:** Node.js, Express, Dockerode, Socket.IO
 - **Docker Runtime:** Isolated per room
-- **DevOps:** Nginx, Docker Compose
+- **DevOps:** Traefik, Docker Compose
