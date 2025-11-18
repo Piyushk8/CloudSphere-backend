@@ -21,6 +21,18 @@ export default function getLanguageConfig(language: string) {
           npm install && npm i nodemon
         `,
     },
+    nodejs: {
+      image: "node:18",
+      port: 8080,
+      envVars: ["NODE_ENV=development"],
+      zipKey: "nodejs",
+      installCommand: `
+          apt update && apt install -y unzip && \
+          chmod +x /runner.sh && \
+          cd /workspace && unzip base.zip -d . && rm base.zip && \
+          npm install && npm i nodemon
+        `,
+    },
     expressjs: {
       image: "node:18",
       port: 8080,

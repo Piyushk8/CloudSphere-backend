@@ -32,10 +32,15 @@ export class DockerManager {
   ): Promise<{ containerId: string } | Error> {
     const { image, roomId, exposedPort = 8080, envVars = [] } = options;
     const containerName = `room-${roomId}`;
-    console.log(process.env.VITE_SERVER);
     if (!process.env.VITE_SERVER) {
       console.log("no vite server");
       return new Error("no server");
+    }
+    try {
+      await this.ensureImage(image);
+    } catch (err) {
+      console.error("Image pull failed:", err);
+      return new Error(`Failed to pull image: ${image}`);
     }
     // const host = `${containerName}.${process.env.VITE_SERVER}`;
     const host = `${containerName}.localtest.me`;
@@ -100,6 +105,34 @@ export class DockerManager {
 
     this.monitorPorts(roomId, container.id);
     return { containerId: container.id };
+  }
+  private async ensureImage(imageName: string) {
+    try {
+      // Check if the image exists locally
+      await this.docker.getImage(imageName).inspect();
+      return; // Image exists, nothing to do
+    } catch (_) {
+      console.log(`Image ${imageName} not found locally. Pulling...`);
+    }
+
+    // Pull the image
+    return new Promise((resolve, reject) => {
+      this.docker.pull(imageName, (err: any, stream: any) => {
+        if (err) return reject(err);
+
+        this.docker.modem.followProgress(
+          stream,
+          (error: any) => {
+            if (error) return reject(error);
+            console.log(`Image ${imageName} pulled successfully.`);
+            resolve(true);
+          },
+          (progress: any) => {
+            // console.log(progress.status);
+          }
+        );
+      });
+    });
   }
 
   async getActivePorts(containerId: string): Promise<string[]> {
