@@ -1,49 +1,55 @@
+# CloudIDE
 
-# 🌐 Cloud IDE
-Think Replit, but with Docker containers, real file systems, and full-stack muscle.
-This cloud-based collaborative IDE isn’t just for tinkering — it’s built for real development, with full support for:
+A cloud-based collaborative IDE designed for real-world development. Similar in spirit to Replit, but built on isolated Docker containers with real file systems and full-stack support.
 
-🐳 Isolated Docker environments per user
-🧠 PERN-ready (Postgres, Express, React, Node)
-💻 Real-time terminal + Monaco code editing
-🔄 Live file syncing from container to UI
-🚀 Live preview for React, Express, or any app you spin up
-🤝 Built-in collaboration (coming soon!)
+This platform is intended for serious development workflows, not just experimentation. It supports:
 
-It’s like hosting your own VS Code + Docker + Terminal + Preview in the cloud, minus the headaches. Whether you're prototyping a side project, teaching a bootcamp, or demoing an app.
+* Isolated Docker environments per user
+* Full PERN stack support (Postgres, Express, React, Node.js)
+* Integrated terminal and Monaco-based code editor
+* Live file synchronization between container and UI
+* Live preview for React, Express, or any running application
+* Built-in collaboration (planned)
+
+Effectively, this provides a hosted VS Code–like experience with Docker, terminal access, and live previews, without the operational overhead. It is suitable for prototyping, bootcamps, internal demos, and collaborative development.
+
 ---
 
-# Demo video:
-https://github.com/user-attachments/assets/7a3a354f-84b9-4b2b-90f2-58d57c3b8ee2
+## Demo Video
 
-## 🔧 Backend
+[https://github.com/user-attachments/assets/7a3a354f-84b9-4b2b-90f2-58d57c3b8ee2](https://github.com/user-attachments/assets/7a3a354f-84b9-4b2b-90f2-58d57c3b8ee2)
 
-### 🧱 Features
-- One Docker container per user/room
-- Terminal powered by `node-pty` & xterm.js
-- Real-time collaboration with Socket.IO
-- File syncing via in-container `inotifywait`
-- File persistnace and storage on S3 bucket
-- Dynamic port detection for running apps (React, Express, etc.)
-- Reverse proxy support via Traefik
+---
 
-### 🚀 Setup Instructions
+## Backend
 
-1. **Install dependencies:**
+### Features
+
+* One Docker container per user or room
+* Terminal access powered by `node-pty` and xterm.js
+* Real-time communication via Socket.IO
+* File system change detection using `inotifywait` inside containers
+* File persistence backed by an S3-compatible storage layer
+* Dynamic port detection for running services (React, Express, etc.)
+* Reverse proxy support via Traefik
+
+### Setup Instructions
+
+1. **Install dependencies**
 
 ```bash
 cd backend
 npm install
 ```
 
-2. **Environment Variables (.env):**
+2. **Environment variables (.env)**
 
 ```env
 PORT=3001
 DOCKER_SOCKET=/var/run/docker.sock
 ```
 
-3. **Start the Backend:**
+3. **Start the backend**
 
 ```bash
 npm run dev
@@ -51,21 +57,23 @@ npm run dev
 
 ---
 
-## 🐳 Docker-Based Room System
+## Docker-Based Room System
 
-- Each user joins a room → spins up a Docker container.
-- Room has:
-  - PTY terminal (node-pty)
-  - File system sync via `/workspace`
-  - Isolated network environment
+* Each user joins a room, which provisions a dedicated Docker container.
+* Each room includes:
+
+  * A PTY-backed terminal
+  * A synchronized workspace directory (`/workspace`)
+  * An isolated network environment
 
 ---
 
-## 🔌 Key Backend APIs & Socket Events
+## Key Backend APIs and Socket Events
 
 ### `POST /room/create`
 
 Creates a Docker container for the user and returns:
+
 ```json
 {
   "roomId": "abc123",
@@ -76,69 +84,84 @@ Creates a Docker container for the user and returns:
 
 ### Socket Events
 
-| Event | Direction | Description |
-|-------|-----------|-------------|
-| `joinRoom` | Client → Server | Joins a room |
-| `terminal:input` | Client → Server | Sends terminal input |
-| `terminal:output` | Server → Client | Returns terminal output |
-| `directory:changed` | Server → Client | File tree changes (watched by inotify) |
-| `active-ports` | Server → Client | Ports exposed inside container (React, Express, etc.) |
+| Event               | Direction       | Description                              |
+| ------------------- | --------------- | ---------------------------------------- |
+| `joinRoom`          | Client → Server | Join an existing room                    |
+| `terminal:input`    | Client → Server | Send terminal input                      |
+| `terminal:output`   | Server → Client | Stream terminal output                   |
+| `directory:changed` | Server → Client | Notify UI of file system changes         |
+| `active-ports`      | Server → Client | Report ports exposed by running services |
 
 ---
 
-## 📦 Frontend
+## Frontend
 
-### 🧱 Features
+### Features
 
-- Monaco code editor
-- Xterm.js terminal emulator
-- File explorer synced to container's `/workspace`
-- Preview window for React/Express apps
-- Real-time collab ready *under-development
+* Monaco-based code editor
+* Terminal emulator using xterm.js
+* File explorer synchronized with the container workspace
+* Embedded preview window for React and Express applications
+* Collaboration-ready architecture (in progress)
 
-### 🚀 Setup Instructions
+### Setup Instructions
 
-1. **Install frontend dependencies:**
+1. **Install dependencies**
 
 ```bash
 cd frontend
 npm install
 ```
 
-2. **Start frontend dev server:**
+2. **Start the development server**
 
 ```bash
 npm run dev
 ```
 
-Make sure backend is running and Vite proxy is configured to forward `/api` and WebSocket traffic.
+Ensure the backend is running and the Vite proxy is configured to forward API and WebSocket traffic.
 
 ---
 
-## 🌐 Traefik Reverse Proxy
+## Traefik Reverse Proxy
 
-Traefik automatically detects running services and routes them based on labels in `docker-compose.yml`.
+Traefik automatically detects and routes services based on Docker labels defined in `docker-compose.yml`.
 
-- Routes dev server (`5173`), API (`3001`), and dynamic preview ports
-- Replace legacy NGINX config with label-based routing
-- TLS + domain management (coming soon)
-
-
-## ✅ To Do / Improvements
-
-- [✅] In-container file watching with `inotifywait`
-- [✅] WebSocket room system with PTY terminals
-- [✅] Add project templates (e.g., Express, React)
-- [✅] Workspace persistence (e.g., bind to volumes or S3)
-- [✅] File system tree sync
-- [❌] Docker container orchestration
-- [❌] Rate limiting and auth for multi-user support
+* Routes frontend, backend API, and dynamically exposed preview ports
+* Replaces static NGINX configuration with label-based routing
+* TLS and domain management planned for a future release
 
 ---
 
-## 👨‍💻 Tech Stack
+## Planned Improvements
 
-- **Frontend:** React, TypeScript, Vite, xterm.js, Monaco Editor
-- **Backend:** Node.js, Express, Dockerode, Socket.IO
-- **Docker Runtime:** Isolated per room
-- **DevOps:** Traefik, Docker Compose
+* Completed:
+
+  * In-container file watching
+  * WebSocket-based room and terminal system
+  * Project templates (React, Express)
+  * Workspace persistence
+  * File tree synchronization
+
+* Pending:
+
+  * Docker container orchestration and scaling
+  * Authentication and rate limiting for multi-user environments
+
+---
+
+## Tech Stack
+
+* **Frontend:** React, TypeScript, Vite, Monaco Editor, xterm.js
+* **Backend:** Node.js, Express, Dockerode, Socket.IO
+* **Runtime:** Docker (isolated per room)
+* **Infrastructure:** Traefik, Docker Compose
+
+If you want, I can also:
+
+* Tighten this further for a **GitHub README**
+* Rewrite it as a **product landing page**
+* Convert it into **investor/demo documentation**
+* Simplify it for **non-technical audiences**
+
+Just tell me the target audience.
